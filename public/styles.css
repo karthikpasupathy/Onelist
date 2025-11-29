@@ -431,6 +431,7 @@ button:active {
   .topbar {
     flex-wrap: wrap;
     gap: 8px;
+    padding: 12px;
   }
 
   .topbar .left {
@@ -448,13 +449,31 @@ button:active {
     flex: 1;
   }
 
+  .content {
+    padding: 0;
+    max-width: 100%;
+  }
+
   #editor {
     font-size: 16px;
-    padding: 16px;
+    padding: 20px;
+    border-radius: 0;
+    background: #f5f1eb; /* Match body background for seamless look */
+    
+    /* Hide scrollbar */
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  
+  #editor::-webkit-scrollbar {
+    display: none;
   }
 
   .auth-card {
     padding: 40px 24px;
+    border: none;
+    box-shadow: none;
+    background: transparent;
   }
 }
 
