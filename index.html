@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0a0a0a" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <title>OneList</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <!-- Auth Screen -->
+    <div id="auth-screen" class="auth-screen">
+      <div class="auth-card">
+        <h1>OneList</h1>
+        <p>Your never-ending productivity file</p>
+        <div id="email-form" class="auth-form">
+          <input type="email" id="email-input" placeholder="Enter your email" autocomplete="email" />
+          <button id="btn-send-code" class="btn-primary">Send Code</button>
+        </div>
+        <div id="code-form" class="auth-form" style="display: none;">
+          <p class="code-sent-msg">Check your email for the verification code</p>
+          <input type="text" id="code-input" placeholder="Enter 6-digit code" maxlength="6" autocomplete="one-time-code" />
+          <button id="btn-verify-code" class="btn-primary">Sign In</button>
+          <button id="btn-back" class="btn-secondary">Back</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main App -->
+    <div id="app" class="app" style="display: none;">
+      <header class="topbar">
+        <div class="logo">OneList</div>
+        <div class="actions">
+          <button id="btn-calendar" class="icon-btn" title="Insert date">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+              <line x1="16" y1="2" x2="16" y2="6"></line>
+              <line x1="8" y1="2" x2="8" y2="6"></line>
+              <line x1="3" y1="10" x2="21" y2="10"></line>
+            </svg>
+          </button>
+          <button id="btn-search-modal" class="icon-btn" title="Search">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+          </button>
+          <div class="profile-menu">
+            <button id="btn-profile" class="icon-btn" title="Menu">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                <circle cx="12" cy="7" r="4"></circle>
+              </svg>
+            </button>
+            <div id="profile-dropdown" class="dropdown" aria-hidden="true">
+              <button id="btn-export-menu">Export</button>
+              <button id="btn-snapshots-menu">Snapshots</button>
+              <button id="btn-logout">Sign Out</button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main class="container">
+        <div class="content">
+          <textarea id="editor" spellcheck="false" placeholder="Type here… Use /today or /tomorrow to insert date (dd-MM-yyyy)."></textarea>
+
+          <section id="search-results" class="search-results" aria-live="polite"></section>
+        </div>
+      </main>
+
+      <!-- Snapshots Modal -->
+      <div id="snapshots-modal" class="modal" aria-hidden="true">
+        <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="snapshots-title">
+          <button class="modal-close" aria-label="Close">×</button>
+          <h2 id="snapshots-title">Snapshots</h2>
+          <ul id="snapshot-list" class="snapshot-list"></ul>
+        </div>
+      </div>
+
+      <!-- Search Modal -->
+      <div id="search-modal" class="modal" aria-hidden="true">
+        <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="search-title">
+          <button class="modal-close" aria-label="Close">×</button>
+          <h2 id="search-title">Search</h2>
+          <input id="search-input" type="search" placeholder="Search or #tag…" autocomplete="off" />
+          <section id="search-results-modal" class="search-results" aria-live="polite"></section>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>
