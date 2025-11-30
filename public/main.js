@@ -268,42 +268,7 @@ function formatDate(d) {
   return `${dd}-${mm}-${yyyy}`;
 }
 
-function placeCursorAtTop() {
-  $editor.focus();
-  $editor.selectionStart = $editor.selectionEnd = 0;
-  $editor.scrollTop = 0;
-}
 
-// Ensure today's date is at top; put cursor on new line after it
-function ensureTodayAtTop() {
-  const today = formatDate(new Date());
-  const lines = $editor.value.split('\n');
-  const firstLine = (lines[0] || '').trim();
-
-  if (firstLine === today) {
-    // Already present; ensure cursor at start of next line
-    const pos = today.length + 1;
-    $editor.selectionStart = $editor.selectionEnd = Math.min(pos, $editor.value.length);
-    $editor.scrollTop = 0;
-    return;
-  }
-
-  // Insert today's date at top
-  const newHeader = `${today}\n`;
-  const newContent = newHeader + $editor.value;
-  $editor.value = newContent;
-
-  // Cursor after date header
-  const pos = newHeader.length;
-  $editor.selectionStart = $editor.selectionEnd = pos;
-  $editor.scrollTop = 0;
-  scheduleSave();
-}
-
-// Insert date header at top
-function appendTodayHeader() {
-  ensureTodayAtTop();
-}
 
 // Profile menu toggle
 $btnProfile.addEventListener('click', () => {
@@ -726,13 +691,6 @@ $editor.addEventListener('input', () => {
 });
 
 $editor.addEventListener('keydown', (e) => {
-  // Ctrl+Shift+D -> Append Date
-  if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'd') {
-    e.preventDefault();
-    appendTodayHeader();
-    return;
-  }
-
   // Enter -> add hyphen, Shift+Enter -> plain newline
   if (e.key === 'Enter') {
     e.preventDefault();
