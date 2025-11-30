@@ -707,7 +707,9 @@ function appendSnapshotItem(snapshot, $list, isPinned) {
   actions.className = 'actions';
 
   const restoreBtn = document.createElement('button');
-  restoreBtn.textContent = 'Restore';
+  restoreBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>';
+  restoreBtn.setAttribute('aria-label', 'Restore');
+  restoreBtn.title = 'Restore';
   restoreBtn.addEventListener('click', async () => {
     $editor.value = snapshot.content || '';
     scheduleSave();
@@ -715,13 +717,17 @@ function appendSnapshotItem(snapshot, $list, isPinned) {
   });
 
   const downloadBtn = document.createElement('button');
-  downloadBtn.textContent = 'Download';
+  downloadBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+  downloadBtn.setAttribute('aria-label', 'Download');
+  downloadBtn.title = 'Download';
   downloadBtn.addEventListener('click', () => {
     downloadText(snapshot.content || '', `snapshot-${snapshot.createdAt}.txt`);
   });
 
   const pinBtn = document.createElement('button');
-  pinBtn.textContent = isPinned ? 'Unpin' : 'Pin';
+  pinBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg>';
+  pinBtn.setAttribute('aria-label', isPinned ? 'Unpin' : 'Pin');
+  pinBtn.title = isPinned ? 'Unpin' : 'Pin';
   pinBtn.className = isPinned ? 'pin-btn pinned' : 'pin-btn';
   pinBtn.addEventListener('click', async () => {
     try {

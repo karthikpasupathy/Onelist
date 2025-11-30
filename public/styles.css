@@ -421,7 +421,10 @@ button:active {
 
 .snapshot-list button {
   font-size: 12px;
-  padding: 6px 12px;
+  padding: 6px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .snapshot-group-header {
