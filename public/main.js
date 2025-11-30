@@ -1035,5 +1035,4 @@ $snippetContent.addEventListener('keydown', (e) => {
 // Init
 (async function init() {
   loadTextFormatting();
-  ensureTodayAtTop();
 })();
