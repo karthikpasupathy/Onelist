@@ -97,6 +97,13 @@ $btnSendCode.addEventListener('click', async () => {
     return;
   }
 
+  // Validate email format
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    alert('Please enter a valid email address');
+    return;
+  }
+
   try {
     $btnSendCode.disabled = true;
     $btnSendCode.textContent = 'Sending...';
@@ -238,14 +245,19 @@ async function createDocument() {
   const docId = id();
   currentDocId = docId;
 
-  await db.transact([
-    tx.documents[docId].update({
-      userId: currentUser.id,
-      content: '',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    }),
-  ]);
+  try {
+    await db.transact([
+      tx.documents[docId].update({
+        userId: currentUser.id,
+        content: '',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      }),
+    ]);
+  } catch (err) {
+    console.error('Error creating document:', err);
+    alert('Failed to create document. Please try refreshing.');
+  }
 }
 
 // Date formatting: dd-MM-yyyy
@@ -539,15 +551,20 @@ async function persistContent() {
   if (!currentDocId || !currentUser) return;
   const content = $editor.value;
 
-  await db.transact([
-    tx.documents[currentDocId].update({
-      content,
-      updatedAt: Date.now(),
-    }),
-  ]);
+  try {
+    await db.transact([
+      tx.documents[currentDocId].update({
+        content,
+        updatedAt: Date.now(),
+      }),
+    ]);
 
-  // Create snapshot every save (we'll limit in UI)
-  await saveSnapshot(content);
+    // Create snapshot every save (we'll limit in UI)
+    await saveSnapshot(content);
+  } catch (err) {
+    console.error('Error saving document:', err);
+    alert('Failed to save your document. Please try again.');
+  }
 }
 
 async function saveSnapshot(content) {
@@ -561,35 +578,39 @@ async function saveSnapshot(content) {
 
   const snapshotId = id();
 
-  await db.transact([
-    tx.snapshots[snapshotId].update({
-      userId: currentUser.id,
-      content,
-      createdAt: now,
-    }),
-  ]);
+  try {
+    await db.transact([
+      tx.snapshots[snapshotId].update({
+        userId: currentUser.id,
+        content,
+        createdAt: now,
+      }),
+    ]);
 
-  lastSnapshotTime = now;
+    lastSnapshotTime = now;
 
-  // Clean old snapshots (keep last 20)
-  const { data } = await db.queryOnce({
-    snapshots: {
-      $: {
-        where: {
-          userId: currentUser.id,
+    // Clean old snapshots (keep last 20)
+    const { data } = await db.queryOnce({
+      snapshots: {
+        $: {
+          where: {
+            userId: currentUser.id,
+          },
         },
+        createdAt: {},
+        id: {},
       },
-      createdAt: {},
-      id: {},
-    },
-  });
+    });
 
-  const snapshots = data?.snapshots || [];
-  if (snapshots.length > 20) {
-    const sorted = snapshots.sort((a, b) => a.createdAt - b.createdAt);
-    const toDelete = sorted.slice(0, snapshots.length - 20);
-    const deleteTxs = toDelete.map((s) => tx.snapshots[s.id].delete());
-    await db.transact(deleteTxs);
+    const snapshots = data?.snapshots || [];
+    if (snapshots.length > 20) {
+      const sorted = snapshots.sort((a, b) => a.createdAt - b.createdAt);
+      const toDelete = sorted.slice(0, snapshots.length - 20);
+      const deleteTxs = toDelete.map((s) => tx.snapshots[s.id].delete());
+      await db.transact(deleteTxs);
+    }
+  } catch (err) {
+    console.error('Error saving snapshot:', err);
   }
 }
 
@@ -699,11 +720,6 @@ Array.from(document.querySelectorAll('.modal')).forEach((modal) => {
 });
 
 // Events
-$btnSearchModal.addEventListener('click', () => {
-  openModal($searchModal);
-  $searchInput.focus();
-});
-
 $editor.addEventListener('input', () => {
   handleSlashCommands();
   scheduleSave();
@@ -746,10 +762,18 @@ function loadTextFormatting() {
   const savedFamily = localStorage.getItem('editorFontFamily');
 
   if (savedSize) {
-    currentFontSize = parseInt(savedSize, 10);
+    const size = parseInt(savedSize, 10);
+    // Validate font size is within acceptable range
+    if (size >= MIN_FONT_SIZE && size <= MAX_FONT_SIZE) {
+      currentFontSize = size;
+    }
   }
   if (savedFamily) {
-    currentFontFamily = savedFamily;
+    // Only apply if it's in the allowed list
+    const allowedFamilies = ['monospace', 'serif', 'sans-serif', 'cursive', 'system-ui'];
+    if (allowedFamilies.includes(savedFamily)) {
+      currentFontFamily = savedFamily;
+    }
   }
 
   applyTextFormatting();
@@ -943,6 +967,12 @@ $btnSaveSnippet.addEventListener('click', async () => {
   // Validate name format (alphanumeric and underscore only)
   if (!/^[a-z0-9_]+$/.test(name)) {
     alert('Snippet name must contain only letters, numbers, and underscores (no spaces)');
+    return;
+  }
+
+  // Validate name length (max 17 characters)
+  if (name.length > 17) {
+    alert('Snippet name must be 17 characters or less');
     return;
   }
 
