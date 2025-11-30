@@ -424,6 +424,43 @@ button:active {
   padding: 6px 12px;
 }
 
+.snapshot-group-header {
+  padding: 12px 0 8px 0 !important;
+  font-weight: 600;
+  color: #3d3d3d;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: none !important;
+  margin-top: 8px;
+}
+
+.snapshot-group-header:first-child {
+  margin-top: 0;
+}
+
+.pin-btn {
+  background: #f0e9e0;
+  color: #8b7355;
+  border: 1px solid #d9cdc2;
+}
+
+.pin-btn:hover {
+  background: #e8ddd2;
+  border-color: #c9a871;
+}
+
+.pin-btn.pinned {
+  background: #c9a871;
+  color: #ffffff;
+  border: 1px solid #b8954a;
+}
+
+.pin-btn.pinned:hover {
+  background: #b8954a;
+  border-color: #a0823f;
+}
+
 /* Mobile Responsive */
 @media (max-width: 640px) {
   .topbar {

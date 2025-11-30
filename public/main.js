@@ -549,12 +549,13 @@ async function saveSnapshot(content) {
         userId: currentUser.id,
         content,
         createdAt: now,
+        pinned: false,
       }),
     ]);
 
     lastSnapshotTime = now;
 
-    // Clean old snapshots (keep last 20)
+    // Clean old snapshots (keep last 20 unpinned snapshots)
     const { data } = await db.queryOnce({
       snapshots: {
         $: {
@@ -564,13 +565,19 @@ async function saveSnapshot(content) {
         },
         createdAt: {},
         id: {},
+        pinned: {},
       },
     });
 
     const snapshots = data?.snapshots || [];
-    if (snapshots.length > 20) {
-      const sorted = snapshots.sort((a, b) => a.createdAt - b.createdAt);
-      const toDelete = sorted.slice(0, snapshots.length - 20);
+    // Separate pinned and unpinned snapshots
+    const pinnedSnapshots = snapshots.filter(s => s.pinned);
+    const unpinnedSnapshots = snapshots.filter(s => !s.pinned);
+    
+    // Only delete old unpinned snapshots if we exceed 20
+    if (unpinnedSnapshots.length > 20) {
+      const sorted = unpinnedSnapshots.sort((a, b) => a.createdAt - b.createdAt);
+      const toDelete = sorted.slice(0, unpinnedSnapshots.length - 20);
       const deleteTxs = toDelete.map((s) => tx.snapshots[s.id].delete());
       await db.transact(deleteTxs);
     }
@@ -613,53 +620,102 @@ async function showSnapshotsModal() {
     },
   });
 
-  const snapshots = (data?.snapshots || []).sort(
+  // Separate pinned and unpinned snapshots
+  const allSnapshots = data?.snapshots || [];
+  const pinnedSnapshots = allSnapshots.filter(s => s.pinned).sort(
+    (a, b) => b.createdAt - a.createdAt
+  );
+  const unpinnedSnapshots = allSnapshots.filter(s => !s.pinned).sort(
     (a, b) => b.createdAt - a.createdAt
   );
 
   const $list = document.getElementById('snapshot-list');
   $list.innerHTML = '';
 
-  if (!snapshots.length) {
+  if (!allSnapshots.length) {
     const li = document.createElement('li');
     li.innerHTML = '<span class="time">No snapshots yet</span>';
     $list.appendChild(li);
   } else {
-    snapshots.forEach((snapshot) => {
-      const li = document.createElement('li');
-      const time = new Date(snapshot.createdAt).toLocaleString();
+    // Display pinned snapshots first
+    if (pinnedSnapshots.length > 0) {
+      const pinnedHeader = document.createElement('li');
+      pinnedHeader.className = 'snapshot-group-header';
+      pinnedHeader.textContent = 'Pinned Snapshots';
+      $list.appendChild(pinnedHeader);
 
-      const timeSpan = document.createElement('span');
-      timeSpan.className = 'time';
-      timeSpan.textContent = time;
-
-      const actions = document.createElement('div');
-      actions.className = 'actions';
-
-      const restoreBtn = document.createElement('button');
-      restoreBtn.textContent = 'Restore';
-      restoreBtn.addEventListener('click', async () => {
-        $editor.value = snapshot.content || '';
-        scheduleSave();
-        closeModal($snapshotsModal);
+      pinnedSnapshots.forEach((snapshot) => {
+        appendSnapshotItem(snapshot, $list, true);
       });
+    }
 
-      const downloadBtn = document.createElement('button');
-      downloadBtn.textContent = 'Download';
-      downloadBtn.addEventListener('click', () => {
-        downloadText(snapshot.content || '', `snapshot-${snapshot.createdAt}.txt`);
+    // Display unpinned snapshots
+    if (unpinnedSnapshots.length > 0) {
+      if (pinnedSnapshots.length > 0) {
+        const unpinnedHeader = document.createElement('li');
+        unpinnedHeader.className = 'snapshot-group-header';
+        unpinnedHeader.textContent = `Dynamic Snapshots (${unpinnedSnapshots.length}/20)`;
+        $list.appendChild(unpinnedHeader);
+      }
+
+      unpinnedSnapshots.forEach((snapshot) => {
+        appendSnapshotItem(snapshot, $list, false);
       });
-
-      actions.appendChild(restoreBtn);
-      actions.appendChild(downloadBtn);
-
-      li.appendChild(timeSpan);
-      li.appendChild(actions);
-      $list.appendChild(li);
-    });
+    }
   }
 
   openModal($snapshotsModal);
+}
+
+function appendSnapshotItem(snapshot, $list, isPinned) {
+  const li = document.createElement('li');
+  const time = new Date(snapshot.createdAt).toLocaleString();
+
+  const timeSpan = document.createElement('span');
+  timeSpan.className = 'time';
+  timeSpan.textContent = time;
+
+  const actions = document.createElement('div');
+  actions.className = 'actions';
+
+  const restoreBtn = document.createElement('button');
+  restoreBtn.textContent = 'Restore';
+  restoreBtn.addEventListener('click', async () => {
+    $editor.value = snapshot.content || '';
+    scheduleSave();
+    closeModal($snapshotsModal);
+  });
+
+  const downloadBtn = document.createElement('button');
+  downloadBtn.textContent = 'Download';
+  downloadBtn.addEventListener('click', () => {
+    downloadText(snapshot.content || '', `snapshot-${snapshot.createdAt}.txt`);
+  });
+
+  const pinBtn = document.createElement('button');
+  pinBtn.textContent = isPinned ? 'Unpin' : 'Pin';
+  pinBtn.className = isPinned ? 'pin-btn pinned' : 'pin-btn';
+  pinBtn.addEventListener('click', async () => {
+    try {
+      await db.transact([
+        tx.snapshots[snapshot.id].update({
+          pinned: !isPinned,
+        }),
+      ]);
+      showSnapshotsModal();
+    } catch (err) {
+      console.error('Error toggling pin:', err);
+      alert('Failed to update snapshot. Please try again.');
+    }
+  });
+
+  actions.appendChild(restoreBtn);
+  actions.appendChild(downloadBtn);
+  actions.appendChild(pinBtn);
+
+  li.appendChild(timeSpan);
+  li.appendChild(actions);
+  $list.appendChild(li);
 }
 
 // Modal helpers
