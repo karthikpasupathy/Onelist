@@ -314,12 +314,12 @@ $searchInput.addEventListener('input', () => {
   });
 });
 
-// Slash commands: /today /tomorrow -> dd-MM-yyyy, /time -> H:M
+// Slash commands: /today /tomorrow -> dd-MM-yyyy, /time -> H:M, /line -> 36 hyphens
 function handleSlashCommands() {
   const pos = $editor.selectionStart;
   const before = $editor.value.slice(0, pos);
   const after = $editor.value.slice(pos);
-  const match = before.match(/(?:^|\s)(\/today|\/tomorrow|\/time)$/);
+  const match = before.match(/(?:^|\s)(\/today|\/tomorrow|\/time|\/line)$/);
   if (!match) return;
 
   const token = match[1];
@@ -335,6 +335,22 @@ function handleSlashCommands() {
     const hours = now.getHours();
     const minutes = String(now.getMinutes()).padStart(2, '0');
     replacement = `${hours}:${minutes}`;
+  } else if (token === '/line') {
+    replacement = '-'.repeat(36);
+    
+    // Check if current line starts with bullet point and replace entire line
+    const lineStart = before.lastIndexOf('\n') + 1;
+    const currentLine = before.slice(lineStart);
+    
+    if (currentLine.trim() === '- /line') {
+      const beforeLineStart = $editor.value.slice(0, lineStart);
+      const replaced = beforeLineStart + replacement + after;
+      $editor.value = replaced;
+      const newPos = lineStart + replacement.length;
+      $editor.selectionStart = $editor.selectionEnd = newPos;
+      scheduleSave();
+      return;
+    }
   }
 
   const replaced = $editor.value.slice(0, start) + replacement + after;
