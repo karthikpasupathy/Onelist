@@ -24,7 +24,6 @@ const $btnAppendDate = document.getElementById('btn-append-date');
 const $btnExport = document.getElementById('btn-export');
 const $btnSnapshots = document.getElementById('btn-snapshots');
 const $snapshotsModal = document.getElementById('snapshots-modal');
-const $btnCalendar = document.getElementById('btn-calendar');
 const $btnSearchModal = document.getElementById('btn-search-modal');
 const $searchModal = document.getElementById('search-modal');
 const $searchInput = document.getElementById('search-input');
@@ -273,8 +272,6 @@ $btnSnapshotsMenu.addEventListener('click', () => {
 });
 
 // Search modal
-$btnCalendar.addEventListener('click', appendTodayHeader);
-
 $btnSearchModal.addEventListener('click', () => {
   openModal($searchModal);
   $searchInput.focus();
@@ -579,7 +576,6 @@ Array.from(document.querySelectorAll('.modal')).forEach((modal) => {
 });
 
 // Events
-$btnCalendar.addEventListener('click', appendTodayHeader);
 $btnSearchModal.addEventListener('click', () => {
   openModal($searchModal);
   $searchInput.focus();
