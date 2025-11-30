@@ -32,10 +32,27 @@ const $btnProfile = document.getElementById('btn-profile');
 const $profileDropdown = document.getElementById('profile-dropdown');
 const $btnExportMenu = document.getElementById('btn-export-menu');
 const $btnSnapshotsMenu = document.getElementById('btn-snapshots-menu');
+const $btnTextFormat = document.getElementById('btn-text-format');
+const $textFormatModal = document.getElementById('text-format-modal');
+const $btnIncreaseSize = document.getElementById('btn-increase-size');
+const $btnDecreaseSize = document.getElementById('btn-decrease-size');
+const $fontSizeDisplay = document.getElementById('font-size-display');
+const $fontFamilySelect = document.getElementById('font-family-select');
+const $btnSaveFormat = document.getElementById('btn-save-format');
+const $btnResetFormat = document.getElementById('btn-reset-format');
 
 let currentUser = null;
 let currentDocId = null;
 let saveTimer = null;
+
+// Text formatting state
+const DEFAULT_FONT_SIZE = 14;
+const MIN_FONT_SIZE = 10;
+const MAX_FONT_SIZE = 24;
+const DEFAULT_FONT_FAMILY = 'monospace';
+
+let currentFontSize = DEFAULT_FONT_SIZE;
+let currentFontFamily = DEFAULT_FONT_FAMILY;
 
 // Auth state listener
 db.subscribeAuth((auth) => {
@@ -617,11 +634,101 @@ $editor.addEventListener('keydown', (e) => {
   }
 });
 
-$search.addEventListener('input', updateSearchResults);
+// Text formatting functions
+function loadTextFormatting() {
+  const savedSize = localStorage.getItem('editorFontSize');
+  const savedFamily = localStorage.getItem('editorFontFamily');
+  
+  if (savedSize) {
+    currentFontSize = parseInt(savedSize, 10);
+  }
+  if (savedFamily) {
+    currentFontFamily = savedFamily;
+  }
+  
+  applyTextFormatting();
+  updateFormatDisplay();
+}
+
+function applyTextFormatting() {
+  $editor.style.fontSize = `${currentFontSize}px`;
+  
+  // Apply font family with fallbacks
+  const fontFamilyMap = {
+    'monospace': "'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', 'Droid Sans Mono', 'Source Code Pro', ui-monospace, monospace",
+    'serif': "'Georgia', 'Times New Roman', serif",
+    'sans-serif': "'Arial', 'Helvetica', sans-serif",
+    'cursive': "'Comic Sans MS', 'Apple Chancery', cursive",
+    'system-ui': "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+  };
+  
+  $editor.style.fontFamily = fontFamilyMap[currentFontFamily] || fontFamilyMap['monospace'];
+}
+
+function updateFormatDisplay() {
+  $fontSizeDisplay.textContent = `${currentFontSize}px`;
+  $fontFamilySelect.value = currentFontFamily;
+}
+
+function saveTextFormatting() {
+  localStorage.setItem('editorFontSize', currentFontSize.toString());
+  localStorage.setItem('editorFontFamily', currentFontFamily);
+}
+
+function resetTextFormatting() {
+  currentFontSize = DEFAULT_FONT_SIZE;
+  currentFontFamily = DEFAULT_FONT_FAMILY;
+  applyTextFormatting();
+  updateFormatDisplay();
+  saveTextFormatting();
+}
+
+// Text format modal
+$btnTextFormat.addEventListener('click', () => {
+  openModal($textFormatModal);
+  updateFormatDisplay();
+});
+
+$btnIncreaseSize.addEventListener('click', () => {
+  if (currentFontSize < MAX_FONT_SIZE) {
+    currentFontSize++;
+    applyTextFormatting();
+    updateFormatDisplay();
+  }
+});
+
+$btnDecreaseSize.addEventListener('click', () => {
+  if (currentFontSize > MIN_FONT_SIZE) {
+    currentFontSize--;
+    applyTextFormatting();
+    updateFormatDisplay();
+  }
+});
+
+$fontFamilySelect.addEventListener('change', () => {
+  currentFontFamily = $fontFamilySelect.value;
+  applyTextFormatting();
+});
+
+$btnSaveFormat.addEventListener('click', () => {
+  saveTextFormatting();
+  closeModal($textFormatModal);
+  // Optional: show a brief confirmation
+  const originalText = $btnSaveFormat.textContent;
+  $btnSaveFormat.textContent = 'Saved!';
+  setTimeout(() => {
+    $btnSaveFormat.textContent = originalText;
+  }, 1000);
+});
+
+$btnResetFormat.addEventListener('click', () => {
+  if (confirm('Reset text formatting to default settings?')) {
+    resetTextFormatting();
+  }
+});
 
 // Init
 (async function init() {
-  await loadContent();
+  loadTextFormatting();
   ensureTodayAtTop();
-  updateSearchResults();
 })();

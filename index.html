@@ -32,6 +32,13 @@
       <header class="topbar">
         <div class="logo">OneList</div>
         <div class="actions">
+          <button id="btn-text-format" class="icon-btn" title="Text Formatting">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="4 7 4 4 20 4 20 7"></polyline>
+              <line x1="9" y1="20" x2="15" y2="20"></line>
+              <line x1="12" y1="4" x2="12" y2="20"></line>
+            </svg>
+          </button>
           <button id="btn-search-modal" class="icon-btn" title="Search">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="11" cy="11" r="8"></circle>
@@ -78,6 +85,39 @@
           <h2 id="search-title">Search</h2>
           <input id="search-input" type="search" placeholder="Search or #tag…" autocomplete="off" />
           <section id="search-results-modal" class="search-results" aria-live="polite"></section>
+        </div>
+      </div>
+
+      <!-- Text Format Modal -->
+      <div id="text-format-modal" class="modal" aria-hidden="true">
+        <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="format-title">
+          <button class="modal-close" aria-label="Close">×</button>
+          <h2 id="format-title">Text Formatting</h2>
+          
+          <div class="format-section">
+            <label>Font Size</label>
+            <div class="font-size-controls">
+              <button id="btn-decrease-size" class="size-btn">−</button>
+              <span id="font-size-display">14px</span>
+              <button id="btn-increase-size" class="size-btn">+</button>
+            </div>
+          </div>
+
+          <div class="format-section">
+            <label>Font Family</label>
+            <select id="font-family-select">
+              <option value="monospace">Monospace (Default)</option>
+              <option value="serif">Serif</option>
+              <option value="sans-serif">Sans Serif</option>
+              <option value="cursive">Cursive</option>
+              <option value="system-ui">System UI</option>
+            </select>
+          </div>
+
+          <div class="format-actions">
+            <button id="btn-save-format" class="btn-primary">Save</button>
+            <button id="btn-reset-format" class="btn-secondary">Reset to Default</button>
+          </div>
         </div>
       </div>
     </div>

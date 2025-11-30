@@ -495,3 +495,78 @@ button:active {
 ::-webkit-scrollbar-thumb:hover {
   background: #c9a871;
 }
+
+/* Text Format Modal Styles */
+.format-section {
+  margin-bottom: 20px;
+}
+
+.format-section label {
+  display: block;
+  margin-bottom: 8px;
+  color: #3d3d3d;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.font-size-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: center;
+}
+
+.size-btn {
+  width: 40px;
+  height: 40px;
+  font-size: 18px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #eae4db;
+  border: 1px solid #d9cdc2;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.size-btn:hover {
+  background: #ddd1c6;
+  border-color: #c9a871;
+}
+
+#font-size-display {
+  min-width: 50px;
+  text-align: center;
+  font-weight: 600;
+  color: #3d3d3d;
+}
+
+#font-family-select {
+  width: 100%;
+  padding: 10px 12px;
+  background: #faf8f5;
+  color: #3d3d3d;
+  border: 1px solid #e0d5ca;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+#font-family-select:focus {
+  outline: none;
+  border-color: #c9a871;
+  background: #fcfaf7;
+}
+
+.format-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.format-actions button {
+  flex: 1;
+}
