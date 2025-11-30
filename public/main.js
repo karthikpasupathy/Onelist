@@ -40,6 +40,16 @@ const $fontSizeDisplay = document.getElementById('font-size-display');
 const $fontFamilySelect = document.getElementById('font-family-select');
 const $btnSaveFormat = document.getElementById('btn-save-format');
 const $btnResetFormat = document.getElementById('btn-reset-format');
+const $btnSnippetsMenu = document.getElementById('btn-snippets-menu');
+const $snippetsModal = document.getElementById('snippets-modal');
+const $snippetsListView = document.getElementById('snippets-list-view');
+const $snippetsFormView = document.getElementById('snippets-form-view');
+const $btnCreateSnippet = document.getElementById('btn-create-snippet');
+const $snippetList = document.getElementById('snippet-list');
+const $snippetName = document.getElementById('snippet-name');
+const $snippetContent = document.getElementById('snippet-content');
+const $btnSaveSnippet = document.getElementById('btn-save-snippet');
+const $btnCancelSnippet = document.getElementById('btn-cancel-snippet');
 
 let currentUser = null;
 let currentDocId = null;
@@ -53,6 +63,7 @@ const DEFAULT_FONT_FAMILY = 'monospace';
 
 let currentFontSize = DEFAULT_FONT_SIZE;
 let currentFontFamily = DEFAULT_FONT_FAMILY;
+let currentEditingSnippetId = null;
 
 // Auth state listener
 db.subscribeAuth((auth) => {
@@ -202,6 +213,22 @@ function subscribeToDocument() {
       // Snapshots loaded - will be used in modal
     }
   );
+
+  // Subscribe to snippets
+  db.subscribeQuery(
+    {
+      snippets: {
+        $: {
+          where: {
+            userId: currentUser.id,
+          },
+        },
+      },
+    },
+    (resp) => {
+      // Snippets loaded - will be used in modal
+    }
+  );
 }
 
 async function createDocument() {
@@ -267,13 +294,21 @@ function appendTodayHeader() {
 // Profile menu toggle
 $btnProfile.addEventListener('click', () => {
   const isOpen = $profileDropdown.getAttribute('aria-hidden') === 'false';
-  $profileDropdown.setAttribute('aria-hidden', isOpen ? 'true' : 'false');
+  if (isOpen) {
+    $profileDropdown.setAttribute('aria-hidden', 'true');
+    $editor.focus();
+  } else {
+    $profileDropdown.setAttribute('aria-hidden', 'false');
+  }
 });
 
 // Close dropdown when clicking outside
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.profile-menu')) {
-    $profileDropdown.setAttribute('aria-hidden', 'true');
+    if ($profileDropdown.getAttribute('aria-hidden') === 'false') {
+      $profileDropdown.setAttribute('aria-hidden', 'true');
+      $editor.focus();
+    }
   }
 });
 
@@ -281,11 +316,20 @@ document.addEventListener('click', (e) => {
 $btnExportMenu.addEventListener('click', () => {
   downloadText($editor.value);
   $profileDropdown.setAttribute('aria-hidden', 'true');
+  $editor.focus();
 });
 
 $btnSnapshotsMenu.addEventListener('click', () => {
   showSnapshotsModal();
   $profileDropdown.setAttribute('aria-hidden', 'true');
+  $editor.focus();
+});
+
+// Snippets menu
+$btnSnippetsMenu.addEventListener('click', async () => {
+  await showSnippetsModal();
+  $profileDropdown.setAttribute('aria-hidden', 'true');
+  $editor.focus();
 });
 
 // Search modal
@@ -333,7 +377,7 @@ function handleSlashCommands() {
   const pos = $editor.selectionStart;
   const before = $editor.value.slice(0, pos);
   const after = $editor.value.slice(pos);
-  const match = before.match(/(?:^|\s)(\/today|\/tomorrow|\/time|\/line)$/);
+  const match = before.match(/(?:^|\s)(\/[a-zA-Z0-9_]+)$/);
   if (!match) return;
 
   const token = match[1];
@@ -365,6 +409,11 @@ function handleSlashCommands() {
       scheduleSave();
       return;
     }
+  } else {
+    // Check if it's a custom snippet
+    const snippetName = token.slice(1); // Remove leading /
+    handleSnippetCommand(snippetName, start, before, after);
+    return;
   }
 
   const replaced = $editor.value.slice(0, start) + replacement + after;
@@ -372,6 +421,51 @@ function handleSlashCommands() {
 
   const newPos = start + replacement.length;
   $editor.selectionStart = $editor.selectionEnd = newPos;
+  scheduleSave();
+}
+
+async function handleSnippetCommand(snippetName, start, before, after) {
+  if (!currentUser) return;
+
+  const { data } = await db.queryOnce({
+    snippets: {
+      $: {
+        where: {
+          userId: currentUser.id,
+          name: snippetName,
+        },
+      },
+    },
+  });
+
+  const snippets = data?.snippets || [];
+  if (snippets.length === 0) return; // Snippet not found, leave as-is
+
+  const snippet = snippets[0];
+  const token = `/${snippetName}`;
+  const lineStart = before.lastIndexOf('\n') + 1;
+  const currentLine = before.slice(lineStart);
+
+  // Check if the line is just "- /snippetname"
+  if (currentLine.trim() === `- ${token}`) {
+    // Replace entire bullet point with snippet content
+    const beforeLineStart = before.slice(0, lineStart);
+    const snippetLines = snippet.content.split('\n');
+    const replacement = snippetLines.join('\n');
+    const replaced = beforeLineStart + replacement + after;
+    $editor.value = replaced;
+    const newPos = beforeLineStart.length + replacement.length;
+    $editor.selectionStart = $editor.selectionEnd = newPos;
+  } else {
+    // Append to next line
+    const snippetLines = snippet.content.split('\n');
+    const replacement = '\n' + snippetLines.join('\n');
+    const replaced = $editor.value.slice(0, start) + replacement + after;
+    $editor.value = replaced;
+    const newPos = start + replacement.length;
+    $editor.selectionStart = $editor.selectionEnd = newPos;
+  }
+
   scheduleSave();
 }
 
@@ -724,6 +818,175 @@ $btnSaveFormat.addEventListener('click', () => {
 $btnResetFormat.addEventListener('click', () => {
   if (confirm('Reset text formatting to default settings?')) {
     resetTextFormatting();
+  }
+});
+
+// Snippets modal
+async function showSnippetsModal() {
+  if (!currentUser) return;
+
+  const { data } = await db.queryOnce({
+    snippets: {
+      $: {
+        where: {
+          userId: currentUser.id,
+        },
+      },
+    },
+  });
+
+  const snippets = (data?.snippets || []).sort(
+    (a, b) => (a.name || '').localeCompare(b.name || '')
+  );
+
+  $snippetList.innerHTML = '';
+
+  if (!snippets.length) {
+    const li = document.createElement('li');
+    li.innerHTML = '<span class="empty-msg">No snippets yet. Create one to get started.</span>';
+    $snippetList.appendChild(li);
+  } else {
+    snippets.forEach((snippet) => {
+      const li = document.createElement('li');
+      li.className = 'snippet-item';
+
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'snippet-name';
+      nameSpan.textContent = `/${snippet.name}`;
+
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+
+      const editBtn = document.createElement('button');
+      editBtn.textContent = 'Edit';
+      editBtn.addEventListener('click', () => {
+        editSnippet(snippet);
+      });
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.textContent = 'Delete';
+      deleteBtn.addEventListener('click', async () => {
+        if (confirm(`Delete snippet /${snippet.name}?`)) {
+          await db.transact([tx.snippets[snippet.id].delete()]);
+          showSnippetsModal();
+        }
+      });
+
+      actions.appendChild(editBtn);
+      actions.appendChild(deleteBtn);
+
+      li.appendChild(nameSpan);
+      li.appendChild(actions);
+      $snippetList.appendChild(li);
+    });
+  }
+
+  currentEditingSnippetId = null;
+  showSnippetsListView();
+  openModal($snippetsModal);
+}
+
+function showSnippetsListView() {
+  $snippetsListView.style.display = 'block';
+  $snippetsFormView.style.display = 'none';
+  $snippetName.value = '';
+  $snippetContent.value = '';
+}
+
+function showSnippetsFormView() {
+  $snippetsListView.style.display = 'none';
+  $snippetsFormView.style.display = 'block';
+  $snippetName.focus();
+}
+
+function editSnippet(snippet) {
+  currentEditingSnippetId = snippet.id;
+  $snippetName.value = snippet.name || '';
+  $snippetContent.value = snippet.content || '';
+  showSnippetsFormView();
+}
+
+// Snippets form handlers
+$btnCreateSnippet.addEventListener('click', () => {
+  currentEditingSnippetId = null;
+  $snippetName.value = '';
+  $snippetContent.value = '';
+  showSnippetsFormView();
+});
+
+$btnSaveSnippet.addEventListener('click', async () => {
+  const name = $snippetName.value.trim().toLowerCase();
+  const content = $snippetContent.value.trim();
+
+  if (!name) {
+    alert('Please enter a snippet name');
+    return;
+  }
+
+  if (!content) {
+    alert('Please enter snippet content');
+    return;
+  }
+
+  // Validate name format (alphanumeric and underscore only)
+  if (!/^[a-z0-9_]+$/.test(name)) {
+    alert('Snippet name must contain only letters, numbers, and underscores (no spaces)');
+    return;
+  }
+
+  try {
+    if (currentEditingSnippetId) {
+      // Update existing snippet
+      await db.transact([
+        tx.snippets[currentEditingSnippetId].update({
+          name,
+          content,
+          updatedAt: Date.now(),
+        }),
+      ]);
+    } else {
+      // Create new snippet
+      const snippetId = id();
+      await db.transact([
+        tx.snippets[snippetId].update({
+          userId: currentUser.id,
+          name,
+          content,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        }),
+      ]);
+    }
+
+    showSnippetsModal();
+  } catch (err) {
+    alert('Error saving snippet: ' + err.message);
+  }
+});
+
+$btnCancelSnippet.addEventListener('click', () => {
+  showSnippetsListView();
+});
+
+// Snippet content keydown handler
+$snippetContent.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const pos = $snippetContent.selectionStart;
+    const before = $snippetContent.value.slice(0, pos);
+    const after = $snippetContent.value.slice($snippetContent.selectionEnd);
+
+    if (e.shiftKey) {
+      // Shift+Enter: just newline, no hyphen
+      $snippetContent.value = before + '\n' + after;
+      const newPos = pos + 1;
+      $snippetContent.selectionStart = $snippetContent.selectionEnd = newPos;
+    } else {
+      // Enter: newline + hyphen
+      $snippetContent.value = before + '\n- ' + after;
+      const newPos = pos + 3; // after "\n- "
+      $snippetContent.selectionStart = $snippetContent.selectionEnd = newPos;
+    }
   }
 });
 

@@ -222,16 +222,14 @@ button:active {
   font-size: 13px;
   cursor: pointer;
   transition: background 0.1s ease;
-  border-bottom: 1px solid #e8ddd2;
 }
 
 .dropdown button:last-child {
-  border-bottom: none;
+  /* ... existing code ... */
 }
 
 .dropdown button:hover {
   background: #f5f1eb;
-  border-color: #e8ddd2;
 }
 
 /* Container */
@@ -568,5 +566,103 @@ button:active {
 }
 
 .format-actions button {
+  flex: 1;
+}
+
+/* Snippets Modal Styles */
+.snippets-container {
+  width: 100%;
+}
+
+.snippets-actions {
+  margin-bottom: 16px;
+}
+
+.snippet-list {
+  list-style: none;
+}
+
+.snippet-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid #e8ddd2;
+}
+
+.snippet-item:last-child {
+  border-bottom: none;
+}
+
+.snippet-name {
+  color: #3d3d3d;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+}
+
+.snippet-list .empty-msg {
+  color: #8b7355;
+  font-size: 13px;
+  display: block;
+  padding: 16px 0;
+  text-align: center;
+}
+
+.snippet-list .actions {
+  display: flex;
+  gap: 8px;
+}
+
+.snippet-list button {
+  font-size: 12px;
+  padding: 6px 12px;
+}
+
+/* Snippet Form */
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 8px;
+  color: #3d3d3d;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.form-group input,
+.form-group textarea {
+  width: 100%;
+  padding: 10px 12px;
+  background: #faf8f5;
+  color: #3d3d3d;
+  border: 1px solid #e0d5ca;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.form-group input:focus,
+.form-group textarea:focus {
+  outline: none;
+  border-color: #c9a871;
+  background: #fcfaf7;
+}
+
+.form-group textarea {
+  resize: vertical;
+  min-height: 120px;
+  font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+}
+
+.form-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.form-actions button {
   flex: 1;
 }

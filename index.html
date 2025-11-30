@@ -55,6 +55,7 @@
             <div id="profile-dropdown" class="dropdown" aria-hidden="true">
               <button id="btn-export-menu">Export</button>
               <button id="btn-snapshots-menu">Snapshots</button>
+              <button id="btn-snippets-menu">Snippets</button>
               <button id="btn-logout">Sign Out</button>
             </div>
           </div>
@@ -117,6 +118,38 @@
           <div class="format-actions">
             <button id="btn-save-format" class="btn-primary">Save</button>
             <button id="btn-reset-format" class="btn-secondary">Reset to Default</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Snippets Modal -->
+      <div id="snippets-modal" class="modal" aria-hidden="true">
+        <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="snippets-title">
+          <button class="modal-close" aria-label="Close">×</button>
+          <h2 id="snippets-title">Snippets</h2>
+          
+          <div class="snippets-container">
+            <div id="snippets-list-view">
+              <div class="snippets-actions">
+                <button id="btn-create-snippet" class="btn-primary">+ New Snippet</button>
+              </div>
+              <ul id="snippet-list" class="snippet-list"></ul>
+            </div>
+
+            <div id="snippets-form-view" style="display: none;">
+              <div class="form-group">
+                <label for="snippet-name">Snippet Name</label>
+                <input id="snippet-name" type="text" placeholder="e.g., healthscore" />
+              </div>
+              <div class="form-group">
+                <label for="snippet-content">Content</label>
+                <textarea id="snippet-content" placeholder="Enter snippet content. Each line will be preserved."></textarea>
+              </div>
+              <div class="form-actions">
+                <button id="btn-save-snippet" class="btn-primary">Save</button>
+                <button id="btn-cancel-snippet" class="btn-secondary">Cancel</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
