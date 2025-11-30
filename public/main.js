@@ -60,10 +60,12 @@ const DEFAULT_FONT_SIZE = 14;
 const MIN_FONT_SIZE = 10;
 const MAX_FONT_SIZE = 24;
 const DEFAULT_FONT_FAMILY = 'monospace';
+const SNAPSHOT_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 let currentFontSize = DEFAULT_FONT_SIZE;
 let currentFontFamily = DEFAULT_FONT_FAMILY;
 let currentEditingSnippetId = null;
+let lastSnapshotTime = 0;
 
 // Auth state listener
 db.subscribeAuth((auth) => {
@@ -94,7 +96,7 @@ $btnSendCode.addEventListener('click', async () => {
     alert('Please enter your email');
     return;
   }
-  
+
   try {
     $btnSendCode.disabled = true;
     $btnSendCode.textContent = 'Sending...';
@@ -113,12 +115,12 @@ $btnSendCode.addEventListener('click', async () => {
 $btnVerifyCode.addEventListener('click', async () => {
   const email = $emailInput.value.trim();
   const code = $codeInput.value.trim();
-  
+
   if (!code) {
     alert('Please enter the verification code');
     return;
   }
-  
+
   try {
     $btnVerifyCode.disabled = true;
     $btnVerifyCode.textContent = 'Signing in...';
@@ -395,11 +397,11 @@ function handleSlashCommands() {
     replacement = `${hours}:${minutes}`;
   } else if (token === '/line') {
     replacement = '-'.repeat(36);
-    
+
     // Check if current line starts with bullet point and replace entire line
     const lineStart = before.lastIndexOf('\n') + 1;
     const currentLine = before.slice(lineStart);
-    
+
     if (currentLine.trim() === '- /line') {
       const beforeLineStart = $editor.value.slice(0, lineStart);
       const replaced = beforeLineStart + replacement + after;
@@ -507,9 +509,9 @@ function escapeHtml(s) {
   return s.replace(
     /[&<>"']/g,
     (c) =>
-      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[
-        c
-      ])
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[
+      c
+    ])
   );
 }
 
@@ -550,16 +552,24 @@ async function persistContent() {
 
 async function saveSnapshot(content) {
   if (!currentUser) return;
+
+  // Optimization: Only save snapshot if enough time has passed
+  const now = Date.now();
+  if (now - lastSnapshotTime < SNAPSHOT_INTERVAL) {
+    return;
+  }
+
   const snapshotId = id();
-  const ts = Date.now();
 
   await db.transact([
     tx.snapshots[snapshotId].update({
       userId: currentUser.id,
       content,
-      createdAt: ts,
+      createdAt: now,
     }),
   ]);
+
+  lastSnapshotTime = now;
 
   // Clean old snapshots (keep last 20)
   const { data } = await db.queryOnce({
@@ -569,6 +579,8 @@ async function saveSnapshot(content) {
           userId: currentUser.id,
         },
       },
+      createdAt: {},
+      id: {},
     },
   });
 
@@ -732,21 +744,21 @@ $editor.addEventListener('keydown', (e) => {
 function loadTextFormatting() {
   const savedSize = localStorage.getItem('editorFontSize');
   const savedFamily = localStorage.getItem('editorFontFamily');
-  
+
   if (savedSize) {
     currentFontSize = parseInt(savedSize, 10);
   }
   if (savedFamily) {
     currentFontFamily = savedFamily;
   }
-  
+
   applyTextFormatting();
   updateFormatDisplay();
 }
 
 function applyTextFormatting() {
   $editor.style.fontSize = `${currentFontSize}px`;
-  
+
   // Apply font family with fallbacks
   const fontFamilyMap = {
     'monospace': "'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', 'Droid Sans Mono', 'Source Code Pro', ui-monospace, monospace",
@@ -755,7 +767,7 @@ function applyTextFormatting() {
     'cursive': "'Comic Sans MS', 'Apple Chancery', cursive",
     'system-ui': "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
   };
-  
+
   $editor.style.fontFamily = fontFamilyMap[currentFontFamily] || fontFamilyMap['monospace'];
 }
 
