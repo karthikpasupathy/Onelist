@@ -207,7 +207,7 @@ function subscribeToDocument() {
     }
   );
 
-  // Subscribe to snapshots
+  // Subscribe to snapshots and handle cleanup
   db.subscribeQuery(
     {
       snapshots: {
@@ -219,7 +219,35 @@ function subscribeToDocument() {
       },
     },
     (resp) => {
-      // Snapshots loaded - will be used in modal
+      if (resp.error) {
+        console.error('[Snapshot Subscription] Error:', resp.error);
+        return;
+      }
+
+      const snapshots = resp.data?.snapshots || [];
+      console.log(`[Snapshot Subscription] Loaded ${snapshots.length} snapshots.`);
+
+      const unpinnedSnapshots = snapshots.filter(s => !s.pinned);
+
+      // Keep only the latest 20 unpinned snapshots
+      if (unpinnedSnapshots.length > 20) {
+        console.log(`[Snapshot Cleanup] Found ${unpinnedSnapshots.length} unpinned snapshots. Limit is 20.`);
+        const sorted = unpinnedSnapshots.sort((a, b) => a.createdAt - b.createdAt);
+
+        // Delete 1 at a time to debug
+        const toDelete = sorted.slice(0, 1);
+        const s = toDelete[0];
+        console.log('[Snapshot Cleanup] Attempting to delete snapshot:', s.id);
+
+        if (toDelete.length > 0) {
+          db.transact([tx.snapshots[s.id].delete()])
+            .then(() => console.log('[Snapshot Cleanup] Successfully deleted snapshot:', s.id))
+            .catch(err => {
+              console.error('[Snapshot Cleanup] Error deleting snapshot:', err);
+              if (err.body) console.error('[Snapshot Cleanup] Error body:', err.body);
+            });
+        }
+      }
     }
   );
 
@@ -238,6 +266,32 @@ function subscribeToDocument() {
       // Snippets loaded - will be used in modal
     }
   );
+
+  // Expose debug function
+  window.debugCleanup = async () => {
+    console.log('Running manual cleanup...');
+    const { data } = await db.queryOnce({
+      snapshots: {
+        $: { where: { userId: currentUser.id } },
+      }
+    });
+    const snapshots = data?.snapshots || [];
+    const unpinned = snapshots.filter(s => !s.pinned);
+    console.log(`Manual: Found ${unpinned.length} unpinned snapshots.`);
+    if (unpinned.length > 20) {
+      const sorted = unpinned.sort((a, b) => a.createdAt - b.createdAt);
+      const s = sorted[0];
+      console.log('Manual: Deleting snapshot', s.id);
+      try {
+        await db.transact([tx.snapshots[s.id].delete()]);
+        console.log('Manual: Deleted successfully');
+      } catch (err) {
+        console.error('Manual: Delete failed', err);
+      }
+    } else {
+      console.log('Manual: No cleanup needed.');
+    }
+  };
 }
 
 async function createDocument() {
@@ -554,33 +608,7 @@ async function saveSnapshot(content) {
     ]);
 
     lastSnapshotTime = now;
-
-    // Clean old snapshots (keep last 20 unpinned snapshots)
-    const { data } = await db.queryOnce({
-      snapshots: {
-        $: {
-          where: {
-            userId: currentUser.id,
-          },
-        },
-        createdAt: {},
-        id: {},
-        pinned: {},
-      },
-    });
-
-    const snapshots = data?.snapshots || [];
-    // Separate pinned and unpinned snapshots
-    const pinnedSnapshots = snapshots.filter(s => s.pinned);
-    const unpinnedSnapshots = snapshots.filter(s => !s.pinned);
-    
-    // Only delete old unpinned snapshots if we exceed 20
-    if (unpinnedSnapshots.length > 20) {
-      const sorted = unpinnedSnapshots.sort((a, b) => a.createdAt - b.createdAt);
-      const toDelete = sorted.slice(0, unpinnedSnapshots.length - 20);
-      const deleteTxs = toDelete.map((s) => tx.snapshots[s.id].delete());
-      await db.transact(deleteTxs);
-    }
+    // Cleanup is handled by the snapshot subscription
   } catch (err) {
     console.error('Error saving snapshot:', err);
   }
