@@ -1241,29 +1241,80 @@ async function sendAiMessage() {
   renderAiChatMessages();
 
   try {
-    // Always use the secure serverless function
-    const response = await fetch('/api/ask-ai', {
+    // Get user settings from DB
+    const { data: settingsData } = await db.queryOnce({
+      settings: {
+        $: {
+          where: {
+            userId: currentUser.id,
+          },
+        },
+      },
+    });
+
+    const settings = settingsData?.settings || [];
+    if (settings.length === 0 || !settings[0].aiApiKey) {
+      throw new Error('No API key configured. Please add your OpenAI API key in Settings.');
+    }
+
+    const userSettings = settings[0];
+    const apiKey = userSettings.aiApiKey;
+    const model = userSettings.aiModel || 'gpt-4o';
+    const systemPrompt = userSettings.aiSystemPrompt || 'You are a helpful assistant that analyzes my OneList document. Answer questions based on the document content. If you cannot find relevant information in the document, say so clearly.';
+
+    // Build messages for OpenAI
+    const messages = [
+      {
+        role: 'system',
+        content: systemPrompt,
+      },
+    ];
+
+    // Add document context if available
+    const documentContent = $editor.value;
+    if (documentContent && documentContent.trim()) {
+      const truncatedContent = documentContent.length > 8000 
+        ? '...' + documentContent.slice(-8000) 
+        : documentContent;
+      
+      messages.push({
+        role: 'system',
+        content: `Here is the user's current document:\n\n${truncatedContent}`,
+      });
+    }
+
+    // Add user question
+    messages.push({
+      role: 'user',
+      content: question,
+    });
+
+    // Call OpenAI API directly
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        userId: currentUser.id,
-        question,
-        documentContent: $editor.value,
+        model: model,
+        messages: messages,
+        temperature: 0.7,
+        max_tokens: 1000,
       }),
     });
 
     if (!response.ok) {
       const error = await response.json();
-      throw new Error(error.error || 'Failed to get AI response');
+      throw new Error(error.error?.message || 'Failed to get AI response');
     }
 
-    const data = await response.json();
+    const responseData = await response.json();
+    const answer = responseData.choices?.[0]?.message?.content || 'No response from AI';
 
     // Remove loading message and add real response
     aiMessages.pop();
-    aiMessages.push({ role: 'assistant', content: data.answer });
+    aiMessages.push({ role: 'assistant', content: answer });
     renderAiChatMessages();
   } catch (err) {
     console.error('AI chat error:', err);
@@ -1271,7 +1322,7 @@ async function sendAiMessage() {
     aiMessages.pop();
     aiMessages.push({
       role: 'assistant',
-      content: `Error: ${err.message}. Please check your API key in Settings.`,
+      content: `Error: ${err.message}`,
     });
     renderAiChatMessages();
   }
@@ -1348,34 +1399,23 @@ $btnSaveSettings.addEventListener('click', async () => {
   const systemPrompt = $settingsAiSystemPrompt.value.trim();
 
   try {
-    // Save API key via secure server endpoint if provided
-    if (apiKey) {
-      const keyResponse = await fetch('/api/save-key', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          userId: currentUser.id,
-          apiKey: apiKey,
-        }),
-      });
-
-      if (!keyResponse.ok) {
-        const error = await keyResponse.json();
-        throw new Error(error.error || 'Failed to save API key');
-      }
-    }
-
-    // Update settings (model and system prompt only)
+    // Update settings (including API key directly in DB)
     if (currentSettingsId) {
       // Update existing settings
+      const updateData = {
+        aiModel: model,
+        aiSystemPrompt: systemPrompt,
+        updatedAt: Date.now(),
+      };
+      
+      // Add API key if provided
+      if (apiKey) {
+        updateData.aiApiKey = apiKey;
+        updateData.hasAiKey = true;
+      }
+      
       await db.transact([
-        tx.settings[currentSettingsId].update({
-          aiModel: model,
-          aiSystemPrompt: systemPrompt,
-          updatedAt: Date.now(),
-        }),
+        tx.settings[currentSettingsId].update(updateData),
       ]);
     } else {
       // Create new settings
@@ -1383,9 +1423,10 @@ $btnSaveSettings.addEventListener('click', async () => {
       await db.transact([
         tx.settings[settingsId].update({
           userId: currentUser.id,
+          aiApiKey: apiKey || '',
           aiModel: model,
           aiSystemPrompt: systemPrompt,
-          hasAiKey: apiKey ? true : false,
+          hasAiKey: !!apiKey,
           createdAt: Date.now(),
           updatedAt: Date.now(),
         }),

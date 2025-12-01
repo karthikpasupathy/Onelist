@@ -13,7 +13,6 @@
     "vite-plugin-pwa": "^1.2.0"
   },
   "dependencies": {
-    "@instantdb/core": "^0.22.73",
-    "@instantdb/admin": "^0.22.73"
+    "@instantdb/core": "^0.22.73"
   }
 }
