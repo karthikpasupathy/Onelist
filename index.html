@@ -39,6 +39,11 @@
               <line x1="12" y1="4" x2="12" y2="20"></line>
             </svg>
           </button>
+          <button id="btn-ai-chat" class="icon-btn" title="Ask AI">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+            </svg>
+          </button>
           <button id="btn-search-modal" class="icon-btn" title="Search">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <circle cx="11" cy="11" r="8"></circle>
@@ -57,6 +62,7 @@
               <button id="btn-export-menu">Export</button>
               <button id="btn-snapshots-menu">Snapshots</button>
               <button id="btn-snippets-menu">Snippets</button>
+              <button id="btn-settings-menu">Settings</button>
               <button id="btn-logout">Sign Out</button>
             </div>
           </div>
@@ -150,6 +156,66 @@
                 <button id="btn-save-snippet" class="btn-primary">Save</button>
                 <button id="btn-cancel-snippet" class="btn-secondary">Cancel</button>
               </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- AI Chat Modal -->
+      <div id="ai-chat-modal" class="modal" aria-hidden="true">
+        <div class="modal-content ai-chat-content" role="dialog" aria-modal="true" aria-labelledby="ai-chat-title">
+          <button class="modal-close" aria-label="Close">×</button>
+          <h2 id="ai-chat-title">Ask AI</h2>
+          
+          <div class="ai-chat-container">
+            <div id="ai-chat-messages" class="ai-chat-messages"></div>
+            <div class="ai-chat-input-container">
+              <input id="ai-chat-input" type="text" placeholder="Ask a question about your document..." autocomplete="off" />
+              <button id="btn-ai-send" class="btn-primary">Send</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Settings Modal -->
+      <div id="settings-modal" class="modal" aria-hidden="true">
+        <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+          <button class="modal-close" aria-label="Close">×</button>
+          <h2 id="settings-title">Settings</h2>
+          
+          <div class="settings-container">
+            <div class="settings-section">
+              <h3>AI Configuration</h3>
+              <p class="settings-description">Configure OpenAI to analyze your document content</p>
+              
+              <div class="form-group">
+                <label for="settings-ai-api-key">OpenAI API Key</label>
+                <div class="api-key-input-group">
+                  <input id="settings-ai-api-key" type="password" placeholder="Enter your OpenAI API key" autocomplete="off" />
+                  <span id="api-key-status" class="api-key-status"></span>
+                </div>
+                <small>Your key is stored securely and only used for AI chat. Get one at <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com</a></small>
+              </div>
+              
+              <div class="form-group">
+                <label for="settings-ai-model">Model</label>
+                <select id="settings-ai-model">
+                  <option value="gpt-4o">GPT-4o (Recommended)</option>
+                  <option value="gpt-4o-mini">GPT-4o Mini (Faster)</option>
+                  <option value="gpt-4-turbo">GPT-4 Turbo</option>
+                  <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
+                </select>
+              </div>
+              
+              <div class="form-group">
+                <label for="settings-ai-system-prompt">System Prompt</label>
+                <textarea id="settings-ai-system-prompt" placeholder="You are a helpful assistant analyzing my OneList document..." rows="4"></textarea>
+                <small>Customize how the AI should respond to your questions</small>
+              </div>
+            </div>
+            
+            <div class="settings-actions">
+              <button id="btn-save-settings" class="btn-primary">Save Settings</button>
             </div>
           </div>
         </div>

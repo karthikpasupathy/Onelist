@@ -51,6 +51,18 @@ const $snippetName = document.getElementById('snippet-name');
 const $snippetContent = document.getElementById('snippet-content');
 const $btnSaveSnippet = document.getElementById('btn-save-snippet');
 const $btnCancelSnippet = document.getElementById('btn-cancel-snippet');
+const $btnAiChat = document.getElementById('btn-ai-chat');
+const $aiChatModal = document.getElementById('ai-chat-modal');
+const $aiChatMessages = document.getElementById('ai-chat-messages');
+const $aiChatInput = document.getElementById('ai-chat-input');
+const $btnAiSend = document.getElementById('btn-ai-send');
+const $btnSettingsMenu = document.getElementById('btn-settings-menu');
+const $settingsModal = document.getElementById('settings-modal');
+const $settingsAiApiKey = document.getElementById('settings-ai-api-key');
+const $settingsAiModel = document.getElementById('settings-ai-model');
+const $settingsAiSystemPrompt = document.getElementById('settings-ai-system-prompt');
+const $btnSaveSettings = document.getElementById('btn-save-settings');
+const $apiKeyStatus = document.getElementById('api-key-status');
 
 let currentUser = null;
 let currentDocId = null;
@@ -67,6 +79,8 @@ let currentFontSize = DEFAULT_FONT_SIZE;
 let currentFontFamily = DEFAULT_FONT_FAMILY;
 let currentEditingSnippetId = null;
 let lastSnapshotTime = 0;
+let aiMessages = []; // Temporary chat history (not persisted)
+let currentSettingsId = null;
 
 // Auth state listener
 db.subscribeAuth((auth) => {
@@ -272,6 +286,29 @@ function subscribeToDocument() {
     }
   );
 
+  // Subscribe to user settings
+  db.subscribeQuery(
+    {
+      settings: {
+        $: {
+          where: {
+            userId: currentUser.id,
+          },
+        },
+      },
+    },
+    (resp) => {
+      if (resp.error) {
+        console.error('[Settings Subscription] Error:', resp.error);
+        return;
+      }
+      const settings = resp.data?.settings || [];
+      if (settings.length > 0) {
+        currentSettingsId = settings[0].id;
+      }
+    }
+  );
+
   // Expose debug function
   window.debugCleanup = async () => {
     console.log('Running manual cleanup...');
@@ -368,6 +405,19 @@ $btnSnippetsMenu.addEventListener('click', async () => {
   await showSnippetsModal();
   $profileDropdown.setAttribute('aria-hidden', 'true');
   $editor.focus();
+});
+
+// Settings menu
+$btnSettingsMenu.addEventListener('click', async () => {
+  await showSettingsModal();
+  $profileDropdown.setAttribute('aria-hidden', 'true');
+});
+
+// AI Chat button
+$btnAiChat.addEventListener('click', () => {
+  openModal($aiChatModal);
+  renderAiChatMessages();
+  $aiChatInput.focus();
 });
 
 // Search modal
@@ -776,6 +826,10 @@ function openModal(modal) {
 }
 
 function closeModal(modal) {
+  if (modal === $aiChatModal) {
+    aiMessages = [];
+    $aiChatInput.value = '';
+  }
   modal.setAttribute('aria-hidden', 'true');
 }
 
@@ -1102,3 +1156,260 @@ $snippetContent.addEventListener('keydown', (e) => {
 (async function init() {
   loadTextFormatting();
 })();
+
+// ==================== AI CHAT FUNCTIONALITY ====================
+
+// Render AI chat messages
+function renderAiChatMessages() {
+  $aiChatMessages.innerHTML = '';
+
+  if (aiMessages.length === 0) {
+    const emptyDiv = document.createElement('div');
+    emptyDiv.className = 'ai-chat-empty';
+    emptyDiv.innerHTML = 'Ask me anything about your document.<br>Your conversation will be cleared when you close this chat.';
+    $aiChatMessages.appendChild(emptyDiv);
+    return;
+  }
+
+  aiMessages.forEach((msg) => {
+    const msgDiv = document.createElement('div');
+    msgDiv.className = `ai-message ${msg.role}`;
+
+    const avatar = document.createElement('div');
+    avatar.className = 'ai-message-avatar';
+    avatar.textContent = msg.role === 'user' ? 'U' : 'AI';
+
+    const content = document.createElement('div');
+    content.className = 'ai-message-content';
+    
+    // Format AI responses with better styling
+    if (msg.role === 'assistant') {
+      content.innerHTML = formatAiResponse(msg.content);
+    } else {
+      content.textContent = msg.content;
+    }
+
+    msgDiv.appendChild(avatar);
+    msgDiv.appendChild(content);
+    $aiChatMessages.appendChild(msgDiv);
+  });
+
+  // Scroll to bottom
+  $aiChatMessages.scrollTop = $aiChatMessages.scrollHeight;
+}
+
+// Format AI response with markdown-like styling
+function formatAiResponse(text) {
+  // Escape HTML first
+  let formatted = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // Convert **bold** to <strong>
+  formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  
+  // Convert *italic* to <em>
+  formatted = formatted.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  
+  // Convert numbered lists (1. 2. 3. etc)
+  formatted = formatted.replace(/^(\d+\.\s.+)$/gm, '<div class="ai-list-item">$1</div>');
+  
+  // Convert bullet points (- or *)
+  formatted = formatted.replace(/^[-*]\s(.+)$/gm, '<div class="ai-list-item">• $1</div>');
+  
+  // Convert line breaks to <br>
+  formatted = formatted.replace(/\n/g, '<br>');
+  
+  return formatted;
+}
+
+// Send AI chat message
+async function sendAiMessage() {
+  const question = $aiChatInput.value.trim();
+  if (!question) return;
+
+  // Clear input immediately
+  $aiChatInput.value = '';
+
+  // Add user message
+  aiMessages.push({ role: 'user', content: question });
+  renderAiChatMessages();
+
+  // Add loading message
+  aiMessages.push({ role: 'assistant', content: 'Thinking...', loading: true });
+  renderAiChatMessages();
+
+  try {
+    // Always use the secure serverless function
+    const response = await fetch('/api/ask-ai', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        userId: currentUser.id,
+        question,
+        documentContent: $editor.value,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to get AI response');
+    }
+
+    const data = await response.json();
+
+    // Remove loading message and add real response
+    aiMessages.pop();
+    aiMessages.push({ role: 'assistant', content: data.answer });
+    renderAiChatMessages();
+  } catch (err) {
+    console.error('AI chat error:', err);
+    // Remove loading message and show error
+    aiMessages.pop();
+    aiMessages.push({
+      role: 'assistant',
+      content: `Error: ${err.message}. Please check your API key in Settings.`,
+    });
+    renderAiChatMessages();
+  }
+
+  $aiChatInput.focus();
+}
+
+// AI Send button
+$btnAiSend.addEventListener('click', sendAiMessage);
+
+// AI Input enter key
+$aiChatInput.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendAiMessage();
+  }
+});
+
+// ==================== SETTINGS FUNCTIONALITY ====================
+
+// Show settings modal
+async function showSettingsModal() {
+  if (!currentUser) return;
+
+  try {
+    const { data } = await db.queryOnce({
+      settings: {
+        $: {
+          where: {
+            userId: currentUser.id,
+          },
+        },
+      },
+    });
+
+    const settings = data?.settings || [];
+    if (settings.length > 0) {
+      const userSettings = settings[0];
+      currentSettingsId = userSettings.id;
+
+      // Populate form (never show actual API key)
+      $settingsAiModel.value = userSettings.aiModel || 'gpt-4o';
+      $settingsAiSystemPrompt.value = userSettings.aiSystemPrompt || '';
+      $settingsAiApiKey.value = ''; // Never pre-fill API key
+
+      // Show status if key exists using hasAiKey flag
+      if (userSettings.hasAiKey) {
+        $apiKeyStatus.textContent = '✓ Key saved';
+        $apiKeyStatus.className = 'api-key-status';
+      } else {
+        $apiKeyStatus.textContent = '';
+      }
+    } else {
+      // No settings yet - set defaults
+      currentSettingsId = null;
+      $settingsAiModel.value = 'gpt-4o';
+      $settingsAiSystemPrompt.value = 'You are a helpful assistant that analyzes my OneList document. Answer questions based on the document content. If you cannot find relevant information in the document, say so clearly.';
+      $settingsAiApiKey.value = '';
+      $apiKeyStatus.textContent = '';
+    }
+  } catch (err) {
+    console.error('Error loading settings:', err);
+  }
+
+  openModal($settingsModal);
+}
+
+// Save settings
+$btnSaveSettings.addEventListener('click', async () => {
+  if (!currentUser) return;
+
+  const apiKey = $settingsAiApiKey.value.trim();
+  const model = $settingsAiModel.value;
+  const systemPrompt = $settingsAiSystemPrompt.value.trim();
+
+  try {
+    // Save API key via secure server endpoint if provided
+    if (apiKey) {
+      const keyResponse = await fetch('/api/save-key', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId: currentUser.id,
+          apiKey: apiKey,
+        }),
+      });
+
+      if (!keyResponse.ok) {
+        const error = await keyResponse.json();
+        throw new Error(error.error || 'Failed to save API key');
+      }
+    }
+
+    // Update settings (model and system prompt only)
+    if (currentSettingsId) {
+      // Update existing settings
+      await db.transact([
+        tx.settings[currentSettingsId].update({
+          aiModel: model,
+          aiSystemPrompt: systemPrompt,
+          updatedAt: Date.now(),
+        }),
+      ]);
+    } else {
+      // Create new settings
+      const settingsId = id();
+      await db.transact([
+        tx.settings[settingsId].update({
+          userId: currentUser.id,
+          aiModel: model,
+          aiSystemPrompt: systemPrompt,
+          hasAiKey: apiKey ? true : false,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        }),
+      ]);
+      currentSettingsId = settingsId;
+    }
+
+    // Show success feedback
+    const originalText = $btnSaveSettings.textContent;
+    $btnSaveSettings.textContent = 'Saved!';
+    setTimeout(() => {
+      $btnSaveSettings.textContent = originalText;
+    }, 1500);
+
+    // Update status
+    if (apiKey) {
+      $apiKeyStatus.textContent = '✓ Key saved';
+      $apiKeyStatus.className = 'api-key-status';
+    }
+
+    // Clear the password field
+    $settingsAiApiKey.value = '';
+  } catch (err) {
+    console.error('Error saving settings:', err);
+    alert('Failed to save settings: ' + err.message);
+  }
+});
