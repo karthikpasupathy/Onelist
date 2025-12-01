@@ -232,6 +232,15 @@ button:active {
   background: #f5f1eb;
 }
 
+.user-email {
+  padding: 10px 16px;
+  font-size: 12px;
+  color: #8b7355;
+  border-bottom: 1px solid #e8ddd2;
+  word-break: break-all;
+  font-weight: 500;
+}
+
 /* Container */
 .container {
   display: flex;

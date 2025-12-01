@@ -30,6 +30,7 @@ const $searchInput = document.getElementById('search-input');
 const $searchResultsModal = document.getElementById('search-results-modal');
 const $btnProfile = document.getElementById('btn-profile');
 const $profileDropdown = document.getElementById('profile-dropdown');
+const $userEmail = document.getElementById('user-email');
 const $btnExportMenu = document.getElementById('btn-export-menu');
 const $btnSnapshotsMenu = document.getElementById('btn-snapshots-menu');
 const $btnTextFormat = document.getElementById('btn-text-format');
@@ -71,6 +72,10 @@ let lastSnapshotTime = 0;
 db.subscribeAuth((auth) => {
   if (auth.user) {
     currentUser = auth.user;
+    // Update user email display
+    if ($userEmail && auth.user.email) {
+      $userEmail.textContent = auth.user.email;
+    }
     showApp();
     subscribeToDocument();
   } else {
