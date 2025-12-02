@@ -52,10 +52,8 @@ const $snippetContent = document.getElementById('snippet-content');
 const $btnSaveSnippet = document.getElementById('btn-save-snippet');
 const $btnCancelSnippet = document.getElementById('btn-cancel-snippet');
 const $btnAiChat = document.getElementById('btn-ai-chat');
-const $aiChatModal = document.getElementById('ai-chat-modal');
-const $aiChatMessages = document.getElementById('ai-chat-messages');
-const $aiChatInput = document.getElementById('ai-chat-input');
-const $btnAiSend = document.getElementById('btn-ai-send');
+const $aiActionsModal = document.getElementById('ai-actions-modal');
+const $aiActionsResult = document.getElementById('ai-actions-result');
 const $btnSettingsMenu = document.getElementById('btn-settings-menu');
 const $settingsModal = document.getElementById('settings-modal');
 const $settingsAiApiKey = document.getElementById('settings-ai-api-key');
@@ -81,7 +79,6 @@ let currentFontSize = DEFAULT_FONT_SIZE;
 let currentFontFamily = DEFAULT_FONT_FAMILY;
 let currentEditingSnippetId = null;
 let lastSnapshotTime = 0;
-let aiMessages = []; // Temporary chat history (not persisted)
 let currentSettingsId = null;
 
 // Auth state listener
@@ -415,11 +412,9 @@ $btnSettingsMenu.addEventListener('click', async () => {
   $profileDropdown.setAttribute('aria-hidden', 'true');
 });
 
-// AI Chat button
+// AI Insights button
 $btnAiChat.addEventListener('click', () => {
-  openModal($aiChatModal);
-  renderAiChatMessages();
-  $aiChatInput.focus();
+  openModal($aiActionsModal);
 });
 
 // Search modal
@@ -841,9 +836,8 @@ function openModal(modal) {
 }
 
 function closeModal(modal) {
-  if (modal === $aiChatModal) {
-    aiMessages = [];
-    $aiChatInput.value = '';
+  if (modal === $aiActionsModal) {
+    $aiActionsResult.innerHTML = '';
   }
   modal.setAttribute('aria-hidden', 'true');
 }
@@ -1257,46 +1251,212 @@ $snippetContent.addEventListener('keydown', (e) => {
   loadTextFormatting();
 })();
 
-// ==================== AI CHAT FUNCTIONALITY ====================
+// ==================== AI INSIGHTS FUNCTIONALITY ====================
 
-// Render AI chat messages
-function renderAiChatMessages() {
-  $aiChatMessages.innerHTML = '';
+// Delegate clicks on action buttons
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.action-btn');
+  if (btn && btn.dataset.action) {
+    runAiAction(btn.dataset.action);
+  }
+});
 
-  if (aiMessages.length === 0) {
-    const emptyDiv = document.createElement('div');
-    emptyDiv.className = 'ai-chat-empty';
-    emptyDiv.innerHTML = 'Ask me anything about your document.<br>Your conversation will be cleared when you close this chat.';
-    $aiChatMessages.appendChild(emptyDiv);
-    return;
+// Helper: parse document into date sections using dd-MM-yyyy headers
+function parseDateSections() {
+  const lines = $editor.value.split('\n');
+  const dateRegex = /^(\d{2})-(\d{2})-(\d{4})$/;
+  const sections = [];
+  let current = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    const m = line.match(dateRegex);
+    if (m) {
+      // close previous section
+      if (current) {
+        current.endIndex = i - 1;
+        current.text = lines.slice(current.startIndex, current.endIndex + 1).join('\n');
+        sections.push(current);
+      }
+      const dd = parseInt(m[1], 10);
+      const mm = parseInt(m[2], 10);
+      const yyyy = parseInt(m[3], 10);
+      const dt = new Date(yyyy, mm - 1, dd);
+      current = { date: dt, headerIndex: i, startIndex: i + 1, endIndex: i + 1, text: '' };
+    }
+  }
+  if (current) {
+    current.endIndex = lines.length - 1;
+    current.text = lines.slice(current.startIndex, current.endIndex + 1).join('\n');
+    sections.push(current);
+  }
+  return sections;
+}
+
+function startOfMonth(d) {
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+
+function addDays(d, n) {
+  const x = new Date(d);
+  x.setDate(x.getDate() + n);
+  return x;
+}
+
+function sameDay(a, b) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+// Collect content for a range type
+function getRangeContent(type) {
+  const secs = parseDateSections();
+  const today = new Date();
+  let selected = [];
+
+  if (type === 'weekly') {
+    const from = addDays(today, -6);
+    selected = secs.filter(s => s.date >= from && s.date <= today);
+  } else if (type === 'monthly') {
+    const from = startOfMonth(today);
+    selected = secs.filter(s => s.date >= from && s.date <= today);
+  } else if (type === 'mental') {
+    selected = secs.filter(s => sameDay(s.date, today));
+    if (!selected.length && secs.length) {
+      selected = [secs[secs.length - 1]]; // fallback to last section
+    }
+  } else if (type === 'plan') {
+    const selText = getSelectedText();
+    if (selText && selText.trim()) {
+      return selText.trim();
+    }
+    // fallback to today or last section
+    const todaySec = secs.filter(s => sameDay(s.date, today));
+    selected = todaySec.length ? todaySec : (secs.length ? [secs[secs.length - 1]] : []);
   }
 
-  aiMessages.forEach((msg) => {
-    const msgDiv = document.createElement('div');
-    msgDiv.className = `ai-message ${msg.role}`;
+  const combined = selected.map(s => s.text.trim()).filter(Boolean).join('\n\n');
+  return combined || '';
+}
 
-    const avatar = document.createElement('div');
-    avatar.className = 'ai-message-avatar';
-    avatar.textContent = msg.role === 'user' ? 'U' : 'AI';
+function getSelectedText() {
+  const start = $editor.selectionStart;
+  const end = $editor.selectionEnd;
+  if (start === end) return '';
+  return $editor.value.slice(start, end);
+}
 
-    const content = document.createElement('div');
-    content.className = 'ai-message-content';
-    
-    // Format AI responses with better styling
-    if (msg.role === 'assistant') {
-      content.innerHTML = formatAiResponse(msg.content);
+// Build a specific instruction per action
+function actionInstruction(type) {
+  if (type === 'weekly') {
+    return [
+      'Produce a concise weekly summary based strictly on the provided context.',
+      'Include: Highlights (top wins), Themes, Blockers, and 5 actionable next steps.',
+      'Be specific and avoid speculation beyond the context.'
+    ].join(' ');
+  }
+  if (type === 'monthly') {
+    return [
+      'Summarize this month-to-date: key projects, patterns, progress, risks.',
+      'End with priorities for the next week and risk mitigations.',
+      'Ground all points in the provided context.'
+    ].join(' ');
+  }
+  if (type === 'mental') {
+    return [
+      'Assess mental health for today using only the provided context.',
+      'Output sections: Mood, Stress, Energy, Sleep, Confidence.',
+      'Finish with 3 practical self-care actions (brief, doable).'
+    ].join(' ');
+  }
+  if (type === 'plan') {
+    return [
+      'Turn the provided text into a short, prioritized plan.',
+      'Include steps, dependencies, and a simple timeline.',
+      'Keep it actionable and minimal.'
+    ].join(' ');
+  }
+  return 'Provide a concise, context-grounded analysis.';
+}
+
+// Run an AI action
+async function runAiAction(type) {
+  // Clear previous result
+  $aiActionsResult.innerHTML = '';
+  // Show modal if not open
+  openModal($aiActionsModal);
+
+  // Loading UI
+  const loading = document.createElement('div');
+  loading.className = 'ai-message-content';
+  loading.textContent = 'Thinking...';
+  loading.style.fontStyle = 'italic';
+  loading.style.color = '#8b7355';
+  $aiActionsResult.appendChild(loading);
+
+  try {
+    // Load settings
+    const { data: settingsData } = await db.queryOnce({
+      settings: { $: { where: { userId: currentUser.id } } }
+    });
+    const settings = settingsData?.settings || [];
+    if (settings.length === 0 || !settings[0].aiApiKey) {
+      throw new Error('No API key configured. Please add your OpenAI API key in Settings.');
+    }
+    const userSettings = settings[0];
+    const apiKey = userSettings.aiApiKey;
+    const model = userSettings.aiModel || 'gpt-4o';
+    const systemPrompt = userSettings.aiSystemPrompt || 'You are a helpful assistant that analyzes my OneList document. Respond strictly based on provided context.';
+
+    // Collect context for the action
+    const contextText = getRangeContent(type);
+    const instruction = actionInstruction(type);
+
+    // Build messages
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'system', content: `Action: ${type}. Instruction: ${instruction}` }
+    ];
+
+    if (contextText && contextText.trim()) {
+      const truncated = contextText.length > 8000 ? '...' + contextText.slice(-8000) : contextText;
+      messages.push({ role: 'system', content: `Context:\n\n${truncated}` });
     } else {
-      content.textContent = msg.content;
+      messages.push({ role: 'system', content: 'Context: No date-based content found. If applicable, provide a general guidance with clear caveats.' });
     }
 
-    msgDiv.appendChild(avatar);
-    msgDiv.appendChild(content);
-    $aiChatMessages.appendChild(msgDiv);
-  });
+    messages.push({ role: 'user', content: 'Return the result in clear sections and bullet points.' });
 
-  // Scroll to bottom
-  $aiChatMessages.scrollTop = $aiChatMessages.scrollHeight;
+    // Call OpenAI
+    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature: 0.5,
+        max_tokens: 900,
+      }),
+    });
+
+    if (!resp.ok) {
+      const errJson = await resp.json().catch(() => ({}));
+      throw new Error(errJson.error?.message || 'Failed to get AI response');
+    }
+
+    const data = await resp.json();
+    const answer = data.choices?.[0]?.message?.content || 'No response from AI';
+
+    // Render
+    $aiActionsResult.innerHTML = formatAiResponse(answer);
+  } catch (err) {
+    $aiActionsResult.innerHTML = `<div class="ai-message-content">Error: ${escapeHtml(err.message)}</div>`;
+  }
 }
+
+// ==================== AI CHAT FUNCTIONALITY (OLD - KEPT FOR COMPATIBILITY) ====================
 
 // Format AI response with markdown-like styling
 function formatAiResponse(text) {
@@ -1323,123 +1483,6 @@ function formatAiResponse(text) {
   
   return formatted;
 }
-
-// Send AI chat message
-async function sendAiMessage() {
-  const question = $aiChatInput.value.trim();
-  if (!question) return;
-
-  // Clear input immediately
-  $aiChatInput.value = '';
-
-  // Add user message
-  aiMessages.push({ role: 'user', content: question });
-  renderAiChatMessages();
-
-  // Add loading message
-  aiMessages.push({ role: 'assistant', content: 'Thinking...', loading: true });
-  renderAiChatMessages();
-
-  try {
-    // Get user settings from DB
-    const { data: settingsData } = await db.queryOnce({
-      settings: {
-        $: {
-          where: {
-            userId: currentUser.id,
-          },
-        },
-      },
-    });
-
-    const settings = settingsData?.settings || [];
-    if (settings.length === 0 || !settings[0].aiApiKey) {
-      throw new Error('No API key configured. Please add your OpenAI API key in Settings.');
-    }
-
-    const userSettings = settings[0];
-    const apiKey = userSettings.aiApiKey;
-    const model = userSettings.aiModel || 'gpt-4o';
-    const systemPrompt = userSettings.aiSystemPrompt || 'You are a helpful assistant that analyzes my OneList document. Answer questions based on the document content. If you cannot find relevant information in the document, say so clearly.';
-
-    // Build messages for OpenAI
-    const messages = [
-      {
-        role: 'system',
-        content: systemPrompt,
-      },
-    ];
-
-    // Add document context if available
-    const documentContent = $editor.value;
-    if (documentContent && documentContent.trim()) {
-      const truncatedContent = documentContent.length > 8000 
-        ? '...' + documentContent.slice(-8000) 
-        : documentContent;
-      
-      messages.push({
-        role: 'system',
-        content: `Here is the user's current document:\n\n${truncatedContent}`,
-      });
-    }
-
-    // Add user question
-    messages.push({
-      role: 'user',
-      content: question,
-    });
-
-    // Call OpenAI API directly
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: model,
-        messages: messages,
-        temperature: 0.7,
-        max_tokens: 1000,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.error?.message || 'Failed to get AI response');
-    }
-
-    const responseData = await response.json();
-    const answer = responseData.choices?.[0]?.message?.content || 'No response from AI';
-
-    // Remove loading message and add real response
-    aiMessages.pop();
-    aiMessages.push({ role: 'assistant', content: answer });
-    renderAiChatMessages();
-  } catch (err) {
-    console.error('AI chat error:', err);
-    // Remove loading message and show error
-    aiMessages.pop();
-    aiMessages.push({
-      role: 'assistant',
-      content: `Error: ${err.message}`,
-    });
-    renderAiChatMessages();
-  }
-
-  $aiChatInput.focus();
-}
-
-// AI Send button
-$btnAiSend.addEventListener('click', sendAiMessage);
-
-// AI Input enter key
-$aiChatInput.addEventListener('keypress', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    sendAiMessage();
-  }
-});
 
 // ==================== SETTINGS FUNCTIONALITY ====================
 
