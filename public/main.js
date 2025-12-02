@@ -479,7 +479,7 @@ function handleSlashCommands() {
     const now = new Date();
     const hours = now.getHours();
     const minutes = String(now.getMinutes()).padStart(2, '0');
-    replacement = `${hours}:${minutes}`;
+    replacement = `(${hours}:${minutes})`;
   } else if (token === '/line') {
     replacement = '-'.repeat(36);
 
