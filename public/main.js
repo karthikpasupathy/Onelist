@@ -54,6 +54,8 @@ const $btnCancelSnippet = document.getElementById('btn-cancel-snippet');
 const $btnAiChat = document.getElementById('btn-ai-chat');
 const $aiActionsModal = document.getElementById('ai-actions-modal');
 const $aiActionsResult = document.getElementById('ai-actions-result');
+const $aiActionSelect = document.getElementById('ai-action-select');
+const $btnRunAiAction = document.getElementById('btn-run-ai-action');
 const $btnSettingsMenu = document.getElementById('btn-settings-menu');
 const $settingsModal = document.getElementById('settings-modal');
 const $settingsAiApiKey = document.getElementById('settings-ai-api-key');
@@ -838,6 +840,7 @@ function openModal(modal) {
 function closeModal(modal) {
   if (modal === $aiActionsModal) {
     $aiActionsResult.innerHTML = '';
+    $aiActionSelect.value = ''; // Reset dropdown
   }
   modal.setAttribute('aria-hidden', 'true');
 }
@@ -1253,12 +1256,22 @@ $snippetContent.addEventListener('keydown', (e) => {
 
 // ==================== AI INSIGHTS FUNCTIONALITY ====================
 
-// Delegate clicks on action buttons
+// Delegate clicks on action buttons (desktop)
 document.addEventListener('click', (e) => {
   const btn = e.target.closest('.action-btn');
   if (btn && btn.dataset.action) {
     runAiAction(btn.dataset.action);
   }
+});
+
+// Mobile dropdown handler
+$btnRunAiAction.addEventListener('click', () => {
+  const action = $aiActionSelect.value;
+  if (!action) {
+    alert('Please select an AI action first');
+    return;
+  }
+  runAiAction(action);
 });
 
 // Helper: parse document into date sections using dd-MM-yyyy headers
