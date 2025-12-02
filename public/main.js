@@ -67,6 +67,8 @@ const $apiKeyStatus = document.getElementById('api-key-status');
 let currentUser = null;
 let currentDocId = null;
 let saveTimer = null;
+let isSaving = false;
+let lastSaveStatus = 'saved'; // 'saving', 'saved', 'offline'
 
 // Text formatting state
 const DEFAULT_FONT_SIZE = 14;
@@ -618,14 +620,20 @@ function focusLine(lineIndex) {
 // Save (throttled) + snapshots
 function scheduleSave() {
   if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(persistContent, 800);
+  saveTimer = setTimeout(persistContent, 300); // Reduced from 800ms to 300ms
+  updateSaveIndicator('saving');
 }
 
-async function persistContent() {
+async function persistContent(isForced = false) {
   if (!currentDocId || !currentUser) return;
+  if (isSaving && !isForced) return; // Prevent concurrent saves
+  
+  isSaving = true;
   const content = $editor.value;
 
   try {
+    updateSaveIndicator('saving');
+    
     await db.transact([
       tx.documents[currentDocId].update({
         content,
@@ -635,9 +643,16 @@ async function persistContent() {
 
     // Create snapshot every save (we'll limit in UI)
     await saveSnapshot(content);
+    
+    updateSaveIndicator('saved');
   } catch (err) {
     console.error('Error saving document:', err);
-    alert('Failed to save your document. Please try again.');
+    updateSaveIndicator('error');
+    if (!isForced) {
+      alert('Failed to save your document. Please try again.');
+    }
+  } finally {
+    isSaving = false;
   }
 }
 
@@ -875,6 +890,91 @@ $editor.addEventListener('keydown', (e) => {
     scheduleSave();
   }
 });
+
+// ==================== CRITICAL: PREVENT DATA LOSS ON APP SUSPENSION ====================
+
+// Save immediately when user switches tabs or minimizes app (CRITICAL for PWA!)
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    // User switched away - save immediately!
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    persistContent(true); // Force immediate save
+  }
+});
+
+// Save immediately when user closes tab/window
+window.addEventListener('beforeunload', () => {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  // Note: This is synchronous but persistContent is async
+  // We rely on the browser keeping the page alive long enough
+  persistContent(true);
+});
+
+// Save immediately on page hide (more reliable on mobile PWA)
+window.addEventListener('pagehide', () => {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  persistContent(true);
+});
+
+// Monitor online/offline status
+window.addEventListener('online', () => {
+  updateSaveIndicator('saved');
+  console.log('[OneList] Back online - syncing...');
+  // Try to save any pending changes
+  if (currentDocId && currentUser) {
+    persistContent(true);
+  }
+});
+
+window.addEventListener('offline', () => {
+  updateSaveIndicator('offline');
+  console.log('[OneList] Offline - changes will be queued');
+});
+
+// Update save indicator in UI
+function updateSaveIndicator(status) {
+  lastSaveStatus = status;
+  const indicator = document.getElementById('save-indicator');
+  if (!indicator) return;
+
+  switch (status) {
+    case 'saving':
+      indicator.textContent = 'Saving...';
+      indicator.className = 'save-indicator saving';
+      indicator.style.display = 'inline-block';
+      break;
+    case 'saved':
+      indicator.textContent = 'Saved';
+      indicator.className = 'save-indicator saved';
+      indicator.style.display = 'inline-block';
+      // Hide after 2 seconds
+      setTimeout(() => {
+        if (lastSaveStatus === 'saved') {
+          indicator.style.display = 'none';
+        }
+      }, 2000);
+      break;
+    case 'offline':
+      indicator.textContent = 'Offline';
+      indicator.className = 'save-indicator offline';
+      indicator.style.display = 'inline-block';
+      break;
+    case 'error':
+      indicator.textContent = 'Save failed';
+      indicator.className = 'save-indicator error';
+      indicator.style.display = 'inline-block';
+      break;
+  }
+}
 
 // Text formatting functions
 function loadTextFormatting() {
