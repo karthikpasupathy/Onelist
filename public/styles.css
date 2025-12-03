@@ -1120,3 +1120,44 @@ button:active {
     max-width: 100%;
   }
 }
+
+/* Line Counter */
+.line-counter {
+  position: fixed;
+  bottom: 20px;
+  left: 20px;
+  background: rgba(254, 253, 251, 0.95);
+  color: #8b7355;
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid #e8ddd2;
+  box-shadow: 0 4px 12px rgba(139, 90, 43, 0.1);
+  pointer-events: none;
+  z-index: 10;
+  backdrop-filter: blur(8px);
+  transition: opacity 0.2s ease;
+}
+
+.line-counter #line-count {
+  font-weight: 600;
+  color: #3d3d3d;
+}
+
+/* Hide line counter on mobile */
+@media (max-width: 640px) {
+  .line-counter {
+    display: none;
+  }
+}
+
+/* Hide InstantDB badge */
+iframe[src*="instantdb"],
+iframe[title*="instant"],
+[class*="instant-badge"],
+[id*="instant-badge"],
+div[style*="z-index: 2147483647"] {
+  display: none !important;
+  visibility: hidden !important;
+}

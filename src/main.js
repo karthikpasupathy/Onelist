@@ -62,6 +62,8 @@ const $settingsModal = document.getElementById('settings-modal');
 const $settingsAiModel = document.getElementById('settings-ai-model');
 const $settingsAiSystemPrompt = document.getElementById('settings-ai-system-prompt');
 const $btnSaveSettings = document.getElementById('btn-save-settings');
+const $lineCounter = document.getElementById('line-counter');
+const $lineCount = document.getElementById('line-count');
 
 let currentUser = null;
 let currentDocId = null;
@@ -218,6 +220,8 @@ function subscribeToDocument() {
           if (cursorPos <= $editor.value.length) {
             $editor.selectionStart = $editor.selectionEnd = cursorPos;
           }
+          // Update line counter after loading content
+          updateLineCounter();
         }
       } else {
         // Create new document
@@ -861,6 +865,7 @@ Array.from(document.querySelectorAll('.modal')).forEach((modal) => {
 $editor.addEventListener('input', () => {
   handleSlashCommands();
   scheduleSave();
+  updateLineCounter();
 });
 
 $editor.addEventListener('keydown', (e) => {
@@ -970,6 +975,19 @@ function updateSaveIndicator(status) {
       indicator.style.display = 'inline-block';
       break;
   }
+}
+
+// Update line counter
+function updateLineCounter() {
+  if (!$lineCount) return;
+  
+  const content = $editor.value;
+  // Count non-empty lines
+  const lines = content.split('\n');
+  const nonEmptyLines = lines.filter(line => line.trim().length > 0);
+  const count = nonEmptyLines.length;
+  
+  $lineCount.textContent = count;
 }
 
 // Text formatting functions
