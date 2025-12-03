@@ -64,6 +64,7 @@ const $settingsAiSystemPrompt = document.getElementById('settings-ai-system-prom
 const $btnSaveSettings = document.getElementById('btn-save-settings');
 const $lineCounter = document.getElementById('line-counter');
 const $lineCount = document.getElementById('line-count');
+const $wordCount = document.getElementById('word-count');
 
 let currentUser = null;
 let currentDocId = null;
@@ -979,15 +980,21 @@ function updateSaveIndicator(status) {
 
 // Update line counter
 function updateLineCounter() {
-  if (!$lineCount) return;
+  if (!$lineCount || !$wordCount) return;
   
   const content = $editor.value;
+  
   // Count non-empty lines
   const lines = content.split('\n');
   const nonEmptyLines = lines.filter(line => line.trim().length > 0);
-  const count = nonEmptyLines.length;
+  const lineCount = nonEmptyLines.length;
   
-  $lineCount.textContent = count;
+  // Count words (split by whitespace and filter out empty strings)
+  const words = content.trim().split(/\s+/).filter(word => word.length > 0);
+  const wordCount = content.trim().length > 0 ? words.length : 0;
+  
+  $lineCount.textContent = lineCount;
+  $wordCount.textContent = wordCount;
 }
 
 // Text formatting functions
