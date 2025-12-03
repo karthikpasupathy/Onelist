@@ -1,7 +1,8 @@
 // main.js - OneList with InstantDB
 import { init, tx, id } from 'https://cdn.jsdelivr.net/npm/@instantdb/core/+esm';
 
-const APP_ID = window.INSTANT_APP_ID || 'e94c7dfa-ef77-4fe5-bb80-0cfdc96eb1c0';
+// Read from environment variable or fallback to default
+const APP_ID = import.meta.env.VITE_INSTANT_APP_ID || 'e94c7dfa-ef77-4fe5-bb80-0cfdc96eb1c0';
 
 // Initialize InstantDB
 const db = init({ appId: APP_ID });
