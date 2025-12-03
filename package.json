@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "devDependencies": {
+    "vercel": "^48.12.1",
     "vite": "^5.0.0",
     "vite-plugin-pwa": "^1.2.0"
   },

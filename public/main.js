@@ -1,7 +1,7 @@
 // main.js - OneList with InstantDB
 import { init, tx, id } from 'https://cdn.jsdelivr.net/npm/@instantdb/core/+esm';
 
-const APP_ID = 'e94c7dfa-ef77-4fe5-bb80-0cfdc96eb1c0';
+const APP_ID = window.INSTANT_APP_ID || 'e94c7dfa-ef77-4fe5-bb80-0cfdc96eb1c0';
 
 // Initialize InstantDB
 const db = init({ appId: APP_ID });
@@ -58,11 +58,9 @@ const $aiActionSelect = document.getElementById('ai-action-select');
 const $btnRunAiAction = document.getElementById('btn-run-ai-action');
 const $btnSettingsMenu = document.getElementById('btn-settings-menu');
 const $settingsModal = document.getElementById('settings-modal');
-const $settingsAiApiKey = document.getElementById('settings-ai-api-key');
 const $settingsAiModel = document.getElementById('settings-ai-model');
 const $settingsAiSystemPrompt = document.getElementById('settings-ai-system-prompt');
 const $btnSaveSettings = document.getElementById('btn-save-settings');
-const $apiKeyStatus = document.getElementById('api-key-status');
 
 let currentUser = null;
 let currentDocId = null;
@@ -1407,16 +1405,12 @@ async function runAiAction(type) {
   $aiActionsResult.appendChild(loading);
 
   try {
-    // Load settings
+    // Load settings (model and system prompt only)
     const { data: settingsData } = await db.queryOnce({
       settings: { $: { where: { userId: currentUser.id } } }
     });
     const settings = settingsData?.settings || [];
-    if (settings.length === 0 || !settings[0].aiApiKey) {
-      throw new Error('No API key configured. Please add your OpenAI API key in Settings.');
-    }
-    const userSettings = settings[0];
-    const apiKey = userSettings.aiApiKey;
+    const userSettings = settings[0] || {};
     const model = userSettings.aiModel || 'gpt-4o';
     const systemPrompt = userSettings.aiSystemPrompt || 'You are a helpful assistant that analyzes my OneList document. Respond strictly based on provided context.';
 
@@ -1439,28 +1433,20 @@ async function runAiAction(type) {
 
     messages.push({ role: 'user', content: 'Return the result in clear sections and bullet points.' });
 
-    // Call OpenAI
-    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+    // Call serverless proxy (reads OPENAI_API_KEY from env)
+    const resp = await fetch('/api/openai', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature: 0.5,
-        max_tokens: 900,
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, messages, temperature: 0.5, max_tokens: 900 }),
     });
 
     if (!resp.ok) {
       const errJson = await resp.json().catch(() => ({}));
-      throw new Error(errJson.error?.message || 'Failed to get AI response');
+      throw new Error(errJson.error || 'Failed to get AI response');
     }
 
     const data = await resp.json();
-    const answer = data.choices?.[0]?.message?.content || 'No response from AI';
+    const answer = data.answer || 'No response from AI';
 
     // Render
     $aiActionsResult.innerHTML = formatAiResponse(answer);
@@ -1519,25 +1505,13 @@ async function showSettingsModal() {
       const userSettings = settings[0];
       currentSettingsId = userSettings.id;
 
-      // Populate form (never show actual API key)
       $settingsAiModel.value = userSettings.aiModel || 'gpt-4o';
       $settingsAiSystemPrompt.value = userSettings.aiSystemPrompt || '';
-      $settingsAiApiKey.value = ''; // Never pre-fill API key
-
-      // Show status if key exists using hasAiKey flag
-      if (userSettings.hasAiKey) {
-        $apiKeyStatus.textContent = '✓ Key saved';
-        $apiKeyStatus.className = 'api-key-status';
-      } else {
-        $apiKeyStatus.textContent = '';
-      }
     } else {
       // No settings yet - set defaults
       currentSettingsId = null;
       $settingsAiModel.value = 'gpt-4o';
       $settingsAiSystemPrompt.value = 'You are a helpful assistant that analyzes my OneList document. Answer questions based on the document content. If you cannot find relevant information in the document, say so clearly.';
-      $settingsAiApiKey.value = '';
-      $apiKeyStatus.textContent = '';
     }
   } catch (err) {
     console.error('Error loading settings:', err);
@@ -1550,39 +1524,26 @@ async function showSettingsModal() {
 $btnSaveSettings.addEventListener('click', async () => {
   if (!currentUser) return;
 
-  const apiKey = $settingsAiApiKey.value.trim();
   const model = $settingsAiModel.value;
   const systemPrompt = $settingsAiSystemPrompt.value.trim();
 
   try {
-    // Update settings (including API key directly in DB)
     if (currentSettingsId) {
-      // Update existing settings
       const updateData = {
         aiModel: model,
         aiSystemPrompt: systemPrompt,
         updatedAt: Date.now(),
       };
-      
-      // Add API key if provided
-      if (apiKey) {
-        updateData.aiApiKey = apiKey;
-        updateData.hasAiKey = true;
-      }
-      
       await db.transact([
         tx.settings[currentSettingsId].update(updateData),
       ]);
     } else {
-      // Create new settings
       const settingsId = id();
       await db.transact([
         tx.settings[settingsId].update({
           userId: currentUser.id,
-          aiApiKey: apiKey || '',
           aiModel: model,
           aiSystemPrompt: systemPrompt,
-          hasAiKey: !!apiKey,
           createdAt: Date.now(),
           updatedAt: Date.now(),
         }),
@@ -1596,15 +1557,6 @@ $btnSaveSettings.addEventListener('click', async () => {
     setTimeout(() => {
       $btnSaveSettings.textContent = originalText;
     }, 1500);
-
-    // Update status
-    if (apiKey) {
-      $apiKeyStatus.textContent = '✓ Key saved';
-      $apiKeyStatus.className = 'api-key-status';
-    }
-
-    // Clear the password field
-    $settingsAiApiKey.value = '';
   } catch (err) {
     console.error('Error saving settings:', err);
     alert('Failed to save settings: ' + err.message);

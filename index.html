@@ -7,6 +7,10 @@
 
     <title>OneList</title>
     <link rel="stylesheet" href="/styles.css" />
+    <script>
+      // Injected by Vite at build/dev time
+      window.INSTANT_APP_ID = "%VITE_INSTANT_APP_ID%";
+    </script>
   </head>
   <body>
     <!-- Auth Screen -->
@@ -231,16 +235,7 @@
           <div class="settings-container">
             <div class="settings-section">
               <h3>AI Configuration</h3>
-              <p class="settings-description">Configure OpenAI to analyze your document content</p>
-              
-              <div class="form-group">
-                <label for="settings-ai-api-key">OpenAI API Key</label>
-                <div class="api-key-input-group">
-                  <input id="settings-ai-api-key" type="password" placeholder="Enter your OpenAI API key" autocomplete="off" />
-                  <span id="api-key-status" class="api-key-status"></span>
-                </div>
-                <small>Your key is stored securely and only used for AI chat. Get one at <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com</a></small>
-              </div>
+              <p class="settings-description">Configure OpenAI to analyze your document content. API keys are managed via environment variables.</p>
               
               <div class="form-group">
                 <label for="settings-ai-model">Model</label>
