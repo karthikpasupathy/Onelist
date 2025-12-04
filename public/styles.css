@@ -22,6 +22,7 @@ body {
 /* Auth Screen */
 .auth-screen {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   min-height: 100vh;
@@ -31,6 +32,7 @@ body {
 
 .auth-card {
   text-align: center;
+  width: 100%;
   max-width: 380px;
   padding: 48px 32px;
   background: #fefdfb;
@@ -94,6 +96,43 @@ body {
 .btn-secondary:hover {
   background: #faf8f5;
   color: #3d3d3d;
+}
+
+/* Caution Box */
+.caution-box {
+  background: white;
+  border: 1px solid rgba(139, 115, 85, 0.2);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  text-align: center;
+  max-width: 380px;
+  width: 100%;
+}
+
+.caution-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #000000;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.caution-text {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #000000;
+  margin: 0;
+}
+
+.caution-text strong {
+  color: #3d3d3d;
+}
+
+.caution-text:last-child {
+  margin-bottom: 0;
 }
 
 /* Buttons */
