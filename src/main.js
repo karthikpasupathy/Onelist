@@ -76,6 +76,7 @@ let currentDocId = null;
 let saveTimer = null;
 let isSaving = false;
 let lastSaveStatus = 'saved'; // 'saving', 'saved', 'offline'
+let localUpdatedAt = 0; // Track local version timestamp
 
 // Text formatting state
 const DEFAULT_FONT_SIZE = 14;
@@ -224,16 +225,33 @@ function subscribeToDocument() {
         // Load existing document
         const doc = docs[0];
         currentDocId = doc.id;
-        // Only update if content actually changed to avoid disrupting typing
-        if ($editor.value !== doc.content) {
-          const cursorPos = $editor.selectionStart;
-          $editor.value = doc.content || '';
-          // Restore cursor position if reasonable
-          if (cursorPos <= $editor.value.length) {
-            $editor.selectionStart = $editor.selectionEnd = cursorPos;
+        
+        // CRITICAL: Only update editor if server version is newer than our local version
+        // This prevents old data from mobile PWA overwriting newer laptop data
+        const serverUpdatedAt = doc.updatedAt || 0;
+        
+        if (serverUpdatedAt > localUpdatedAt) {
+          // Server has newer data - update editor
+          if ($editor.value !== doc.content) {
+            const cursorPos = $editor.selectionStart;
+            $editor.value = doc.content || '';
+            // Restore cursor position if reasonable
+            if (cursorPos <= $editor.value.length) {
+              $editor.selectionStart = $editor.selectionEnd = cursorPos;
+            }
+            // Update line counter after loading content
+            updateLineCounter();
           }
-          // Update line counter after loading content
-          updateLineCounter();
+          // Update our local timestamp to match server
+          localUpdatedAt = serverUpdatedAt;
+          console.log(`[Sync] Loaded server version (${new Date(serverUpdatedAt).toISOString()})`);
+        } else if (serverUpdatedAt < localUpdatedAt) {
+          // Our local version is newer - re-save to sync
+          console.log('[Sync] Local version newer, re-syncing to server');
+          scheduleSave();
+        } else {
+          // Timestamps match - we're in sync
+          console.log('[Sync] Already in sync');
         }
       } else {
         // Create new document
@@ -680,15 +698,21 @@ async function persistContent(isForced = false) {
   isSaving = true;
   const content = $editor.value;
 
+  const now = Date.now();
+  
   try {
     updateSaveIndicator('saving');
     
     await db.transact([
       tx.documents[currentDocId].update({
         content,
-        updatedAt: Date.now(),
+        updatedAt: now,
       }),
     ]);
+
+    // Update local timestamp after successful save
+    localUpdatedAt = now;
+    console.log(`[Sync] Saved to server (${new Date(now).toISOString()})`);
 
     // Create snapshot every save (we'll limit in UI)
     await saveSnapshot(content);
