@@ -220,6 +220,11 @@ button:active {
   color: #3d3d3d;
 }
 
+.icon-btn svg,
+.icon-btn i {
+  stroke: currentColor;
+}
+
 .icon-btn:hover {
   background: #eae4db;
 }
@@ -1022,9 +1027,11 @@ button:active {
   transform: translateY(0);
 }
 
-.action-btn svg {
+.action-btn svg,
+.action-btn i {
   flex-shrink: 0;
   color: #8b7355;
+  stroke: currentColor;
 }
 
 .action-btn span {
@@ -1102,6 +1109,30 @@ button:active {
   .ai-actions-result {
     max-height: 300px;
   }
+}
+
+/* AI Usage Display */
+.ai-usage-display {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: #faf8f5;
+  border: 1px solid #e8ddd2;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 16px;
+  color: #8b7355;
+}
+
+.ai-usage-display svg {
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
+.ai-usage-display span {
+  line-height: 1.4;
 }
 
 /* Mobile Responsiveness for AI Chat */

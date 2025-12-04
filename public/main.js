@@ -34,7 +34,7 @@ const $profileDropdown = document.getElementById('profile-dropdown');
 const $userEmail = document.getElementById('user-email');
 const $btnExportMenu = document.getElementById('btn-export-menu');
 const $btnSnapshotsMenu = document.getElementById('btn-snapshots-menu');
-const $btnTextFormat = document.getElementById('btn-text-format-menu');
+const $btnTextFormat = document.getElementById('btn-text-format');
 const $textFormatModal = document.getElementById('text-format-modal');
 const $btnIncreaseSize = document.getElementById('btn-increase-size');
 const $btnDecreaseSize = document.getElementById('btn-decrease-size');
@@ -62,9 +62,6 @@ const $settingsModal = document.getElementById('settings-modal');
 const $settingsAiModel = document.getElementById('settings-ai-model');
 const $settingsAiSystemPrompt = document.getElementById('settings-ai-system-prompt');
 const $btnSaveSettings = document.getElementById('btn-save-settings');
-const $lineCounter = document.getElementById('line-counter');
-const $lineCount = document.getElementById('line-count');
-const $wordCount = document.getElementById('word-count');
 
 let currentUser = null;
 let currentDocId = null;
@@ -84,12 +81,6 @@ let currentFontFamily = DEFAULT_FONT_FAMILY;
 let currentEditingSnippetId = null;
 let lastSnapshotTime = 0;
 let currentSettingsId = null;
-let currentAiUsageId = null;
-let aiUsageCount = 0;
-let usageResetDate = null;
-
-// AI Usage Constants
-const AI_MONTHLY_LIMIT = 10;
 
 // Auth state listener
 db.subscribeAuth((auth) => {
@@ -227,8 +218,6 @@ function subscribeToDocument() {
           if (cursorPos <= $editor.value.length) {
             $editor.selectionStart = $editor.selectionEnd = cursorPos;
           }
-          // Update line counter after loading content
-          updateLineCounter();
         }
       } else {
         // Create new document
@@ -317,42 +306,6 @@ function subscribeToDocument() {
       if (settings.length > 0) {
         currentSettingsId = settings[0].id;
       }
-    }
-  );
-
-  // Subscribe to AI usage tracking
-  db.subscribeQuery(
-    {
-      aiUsage: {
-        $: {
-          where: {
-            userId: currentUser.id,
-          },
-        },
-      },
-    },
-    async (resp) => {
-      if (resp.error) {
-        console.error('[AI Usage Subscription] Error:', resp.error);
-        return;
-      }
-      const usageRecords = resp.data?.aiUsage || [];
-      
-      if (usageRecords.length > 0) {
-        const usage = usageRecords[0];
-        currentAiUsageId = usage.id;
-        aiUsageCount = usage.count || 0;
-        usageResetDate = usage.resetDate ? new Date(usage.resetDate) : null;
-        
-        // Check if we need to reset the counter
-        await checkAndResetUsage();
-      } else {
-        // Create initial usage record
-        await initializeAiUsage();
-      }
-      
-      // Update UI if AI modal is open
-      updateAiUsageDisplay();
     }
   );
 
@@ -463,7 +416,6 @@ $btnSettingsMenu.addEventListener('click', async () => {
 // AI Insights button
 $btnAiChat.addEventListener('click', () => {
   openModal($aiActionsModal);
-  updateAiUsageDisplay();
 });
 
 // Search modal
@@ -909,7 +861,6 @@ Array.from(document.querySelectorAll('.modal')).forEach((modal) => {
 $editor.addEventListener('input', () => {
   handleSlashCommands();
   scheduleSave();
-  updateLineCounter();
 });
 
 $editor.addEventListener('keydown', (e) => {
@@ -1021,25 +972,6 @@ function updateSaveIndicator(status) {
   }
 }
 
-// Update line counter
-function updateLineCounter() {
-  if (!$lineCount || !$wordCount) return;
-  
-  const content = $editor.value;
-  
-  // Count non-empty lines
-  const lines = content.split('\n');
-  const nonEmptyLines = lines.filter(line => line.trim().length > 0);
-  const lineCount = nonEmptyLines.length;
-  
-  // Count words (split by whitespace and filter out empty strings)
-  const words = content.trim().split(/\s+/).filter(word => word.length > 0);
-  const wordCount = content.trim().length > 0 ? words.length : 0;
-  
-  $lineCount.textContent = lineCount;
-  $wordCount.textContent = wordCount;
-}
-
 // Text formatting functions
 function loadTextFormatting() {
   const savedSize = localStorage.getItem('editorFontSize');
@@ -1101,8 +1033,6 @@ function resetTextFormatting() {
 $btnTextFormat.addEventListener('click', () => {
   openModal($textFormatModal);
   updateFormatDisplay();
-  $profileDropdown.setAttribute('aria-hidden', 'true');
-  $editor.focus();
 });
 
 $btnIncreaseSize.addEventListener('click', () => {
@@ -1462,12 +1392,6 @@ function actionInstruction(type) {
 
 // Run an AI action
 async function runAiAction(type) {
-  // Check quota before running
-  const canRun = await checkAiQuota();
-  if (!canRun) {
-    return; // Error message already shown by checkAiQuota
-  }
-
   // Clear previous result
   $aiActionsResult.innerHTML = '';
   // Show modal if not open
@@ -1525,14 +1449,8 @@ async function runAiAction(type) {
     const data = await resp.json();
     const answer = data.answer || 'No response from AI';
 
-    // Increment usage count
-    await incrementAiUsage();
-
     // Render
     $aiActionsResult.innerHTML = formatAiResponse(answer);
-    
-    // Update usage display
-    updateAiUsageDisplay();
   } catch (err) {
     $aiActionsResult.innerHTML = `<div class="ai-message-content">Error: ${escapeHtml(err.message)}</div>`;
   }
@@ -1645,170 +1563,3 @@ $btnSaveSettings.addEventListener('click', async () => {
     alert('Failed to save settings: ' + err.message);
   }
 });
-
-// ==================== AI USAGE QUOTA MANAGEMENT ====================
-
-// Initialize AI usage tracking for new users
-async function initializeAiUsage() {
-  if (!currentUser) return;
-  
-  const usageId = id();
-  const resetDate = getNextMonthFirstDay();
-  
-  try {
-    await db.transact([
-      tx.aiUsage[usageId].update({
-        userId: currentUser.id,
-        count: 0,
-        resetDate: resetDate.toISOString(),
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      }),
-    ]);
-    
-    currentAiUsageId = usageId;
-    aiUsageCount = 0;
-    usageResetDate = resetDate;
-  } catch (err) {
-    console.error('Error initializing AI usage:', err);
-  }
-}
-
-// Get the first day of next month
-function getNextMonthFirstDay() {
-  const now = new Date();
-  const year = now.getMonth() === 11 ? now.getFullYear() + 1 : now.getFullYear();
-  const month = now.getMonth() === 11 ? 0 : now.getMonth() + 1;
-  return new Date(year, month, 1, 0, 0, 0, 0);
-}
-
-// Check if usage needs to be reset
-async function checkAndResetUsage() {
-  if (!currentAiUsageId || !usageResetDate) return;
-  
-  const now = new Date();
-  if (now >= usageResetDate) {
-    // Reset the counter
-    const newResetDate = getNextMonthFirstDay();
-    
-    try {
-      await db.transact([
-        tx.aiUsage[currentAiUsageId].update({
-          count: 0,
-          resetDate: newResetDate.toISOString(),
-          updatedAt: Date.now(),
-        }),
-      ]);
-      
-      aiUsageCount = 0;
-      usageResetDate = newResetDate;
-      console.log('[AI Usage] Counter reset for new month');
-    } catch (err) {
-      console.error('Error resetting AI usage:', err);
-    }
-  }
-}
-
-// Check if user can run AI action
-async function checkAiQuota() {
-  // Ensure usage is initialized
-  if (!currentAiUsageId) {
-    await initializeAiUsage();
-  }
-  
-  // Check and reset if needed
-  await checkAndResetUsage();
-  
-  if (aiUsageCount >= AI_MONTHLY_LIMIT) {
-    const resetDateStr = usageResetDate ? usageResetDate.toLocaleDateString('en-GB', {
-      day: '2-digit',
-      month: 'long',
-      year: 'numeric'
-    }) : '1st of next month';
-    
-    $aiActionsResult.innerHTML = `
-      <div class="ai-message-content" style="color: #d9534f;">
-        <strong>Monthly AI limit reached (${AI_MONTHLY_LIMIT}/${AI_MONTHLY_LIMIT})</strong><br><br>
-        Your free tier allows ${AI_MONTHLY_LIMIT} AI generations per month. Your quota will reset on <strong>${resetDateStr}</strong>.
-      </div>
-    `;
-    return false;
-  }
-  
-  return true;
-}
-
-// Increment AI usage count
-async function incrementAiUsage() {
-  if (!currentAiUsageId) return;
-  
-  const newCount = aiUsageCount + 1;
-  
-  try {
-    await db.transact([
-      tx.aiUsage[currentAiUsageId].update({
-        count: newCount,
-        updatedAt: Date.now(),
-      }),
-    ]);
-    
-    aiUsageCount = newCount;
-    console.log(`[AI Usage] Count: ${aiUsageCount}/${AI_MONTHLY_LIMIT}`);
-  } catch (err) {
-    console.error('Error incrementing AI usage:', err);
-  }
-}
-
-// Update AI usage display in modal
-function updateAiUsageDisplay() {
-  const container = document.querySelector('#ai-actions-modal .modal-content');
-  if (!container) return;
-  
-  // Remove existing usage display
-  const existing = container.querySelector('.ai-usage-display');
-  if (existing) {
-    existing.remove();
-  }
-  
-  // Create new usage display
-  const usageDisplay = document.createElement('div');
-  usageDisplay.className = 'ai-usage-display';
-  
-  const remaining = Math.max(0, AI_MONTHLY_LIMIT - aiUsageCount);
-  const resetDateStr = usageResetDate ? usageResetDate.toLocaleDateString('en-GB', {
-    day: 'numeric',
-    month: 'long'
-  }) : '1st of next month';
-  
-  if (remaining > 0) {
-    usageDisplay.innerHTML = `
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="10"></circle>
-        <path d="M12 6v6l4 2"></path>
-      </svg>
-      <span>${remaining} generation${remaining !== 1 ? 's' : ''} remaining this month</span>
-    `;
-    usageDisplay.style.color = remaining <= 3 ? '#d9534f' : '#8b7355';
-  } else {
-    usageDisplay.innerHTML = `
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="10"></circle>
-        <line x1="15" y1="9" x2="9" y2="15"></line>
-        <line x1="9" y1="9" x2="15" y2="15"></line>
-      </svg>
-      <span>Limit reached • Resets ${resetDateStr}</span>
-    `;
-    usageDisplay.style.color = '#d9534f';
-  }
-  
-  // Insert after the title
-  const title = container.querySelector('h2');
-  if (title) {
-    title.insertAdjacentElement('afterend', usageDisplay);
-  }
-  
-  // Reinitialize Lucide icons for dynamic content
-  if (typeof lucide !== 'undefined') {
-    setTimeout(() => lucide.createIcons(), 0);
-  }
-}
