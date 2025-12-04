@@ -1,8 +1,13 @@
 // main.js - OneList with InstantDB
 import { init, tx, id } from 'https://cdn.jsdelivr.net/npm/@instantdb/core/+esm';
 
-// Read from environment variable or fallback to default
-const APP_ID = import.meta.env.VITE_INSTANT_APP_ID || 'e94c7dfa-ef77-4fe5-bb80-0cfdc96eb1c0';
+// Read InstantDB App ID from environment variable
+// Users must set VITE_INSTANT_APP_ID in their Vercel environment variables
+const APP_ID = import.meta.env.VITE_INSTANT_APP_ID;
+
+if (!APP_ID) {
+  throw new Error('Missing VITE_INSTANT_APP_ID environment variable. Please configure it in Vercel project settings.');
+}
 
 // Initialize InstantDB
 const db = init({ appId: APP_ID });
