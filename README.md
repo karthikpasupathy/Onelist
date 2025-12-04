@@ -21,9 +21,24 @@ npm run dev
 
 ## Deploy to Vercel
 
-1. Push this repo to GitHub
-2. Import it to Vercel
-3. Deploy!
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fkarthikpasupathy%2FOnelist&env=VITE_INSTANT_APP_ID,OPENAI_API_KEY&envDescription=Required%20API%20keys%20for%20OneList&envLink=https%3A%2F%2Fgithub.com%2Fkarthikpasupathy%2FOnelist%23setup)
+
+### Setup Instructions
+
+1. Click the "Deploy with Vercel" button above
+2. Create a new InstantDB app at [instantdb.com](https://instantdb.com)
+3. Get your OpenAI API key from [platform.openai.com](https://platform.openai.com/api-keys)
+4. Add these environment variables in Vercel:
+   - `VITE_INSTANT_APP_ID` - Your InstantDB App ID
+   - `OPENAI_API_KEY` - Your OpenAI API Key
+5. Deploy!
+
+### Manual Deployment
+
+Alternatively, you can:
+1. Fork this repository
+2. Import it to Vercel from your GitHub account
+3. Configure the environment variables as described above
 
 ## Usage
 
