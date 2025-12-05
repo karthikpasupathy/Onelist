@@ -226,6 +226,39 @@ function subscribeToDocument() {
         const doc = docs[0];
         currentDocId = doc.id;
         
+        // CRITICAL: Check for localStorage backup and recover if needed
+        const backupContent = localStorage.getItem(`onelist_backup_${doc.id}`);
+        const backupTimeStr = localStorage.getItem(`onelist_backup_time_${doc.id}`);
+        
+        if (backupContent && backupTimeStr) {
+          const backupTime = parseInt(backupTimeStr, 10);
+          const serverTime = doc.updatedAt || 0;
+          
+          // If backup is newer than server, we lost data - restore it!
+          if (backupTime > serverTime) {
+            console.log('[Recovery] Found newer backup! Restoring lost content...');
+            $editor.value = backupContent;
+            localUpdatedAt = backupTime;
+            
+            // Save the recovered content to server immediately
+            persistContent(true).then(() => {
+              console.log('[Recovery] Successfully restored and saved backup to server');
+              // Clean up backup after successful restore
+              localStorage.removeItem(`onelist_backup_${doc.id}`);
+              localStorage.removeItem(`onelist_backup_time_${doc.id}`);
+            }).catch(err => {
+              console.error('[Recovery] Failed to save restored backup:', err);
+            });
+            
+            updateLineCounter();
+            return; // Skip normal load since we restored from backup
+          } else {
+            // Server has newer or equal data, clean up old backup
+            localStorage.removeItem(`onelist_backup_${doc.id}`);
+            localStorage.removeItem(`onelist_backup_time_${doc.id}`);
+          }
+        }
+        
         // CRITICAL: Only update editor if server version is newer than our local version
         // This prevents old data from mobile PWA overwriting newer laptop data
         const serverUpdatedAt = doc.updatedAt || 0;
@@ -693,11 +726,15 @@ function scheduleSave() {
 
 async function persistContent(isForced = false) {
   if (!currentDocId || !currentUser) return;
-  if (isSaving && !isForced) return; // Prevent concurrent saves
   
-  isSaving = true;
+  // For forced saves (lifecycle events), bypass the isSaving lock
+  if (!isForced && isSaving) return; // Prevent concurrent non-forced saves
+  
+  if (!isForced) {
+    isSaving = true;
+  }
+  
   const content = $editor.value;
-
   const now = Date.now();
   
   try {
@@ -725,7 +762,9 @@ async function persistContent(isForced = false) {
       alert('Failed to save your document. Please try again.');
     }
   } finally {
-    isSaving = false;
+    if (!isForced) {
+      isSaving = false;
+    }
   }
 }
 
@@ -968,34 +1007,62 @@ $editor.addEventListener('keydown', (e) => {
 // ==================== CRITICAL: PREVENT DATA LOSS ON APP SUSPENSION ====================
 
 // Save immediately when user switches tabs or minimizes app (CRITICAL for PWA!)
-document.addEventListener('visibilitychange', () => {
+document.addEventListener('visibilitychange', async () => {
   if (document.hidden) {
-    // User switched away - save immediately!
+    // User switched away - save immediately and wait for completion!
     if (saveTimer) {
       clearTimeout(saveTimer);
       saveTimer = null;
     }
-    persistContent(true); // Force immediate save
+    await persistContent(true);
   }
 });
 
 // Save immediately when user closes tab/window
-window.addEventListener('beforeunload', () => {
+window.addEventListener('beforeunload', (e) => {
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;
   }
-  // Note: This is synchronous but persistContent is async
-  // We rely on the browser keeping the page alive long enough
+  
+  // Create localStorage backup as safety net (synchronous)
+  if (currentDocId && currentUser && $editor) {
+    try {
+      const content = $editor.value;
+      const timestamp = Date.now();
+      localStorage.setItem(`onelist_backup_${currentDocId}`, content);
+      localStorage.setItem(`onelist_backup_time_${currentDocId}`, timestamp.toString());
+      console.log('[Backup] Created localStorage backup on beforeunload');
+    } catch (err) {
+      console.error('[Backup] Failed to create localStorage backup:', err);
+    }
+  }
+  
+  // Also attempt async save (browser may or may not wait)
   persistContent(true);
 });
 
 // Save immediately on page hide (more reliable on mobile PWA)
-window.addEventListener('pagehide', () => {
+window.addEventListener('pagehide', (e) => {
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;
   }
+  
+  // Create localStorage backup as safety net (synchronous)
+  if (currentDocId && currentUser && $editor) {
+    try {
+      const content = $editor.value;
+      const timestamp = Date.now();
+      localStorage.setItem(`onelist_backup_${currentDocId}`, content);
+      localStorage.setItem(`onelist_backup_time_${currentDocId}`, timestamp.toString());
+      console.log('[Backup] Created localStorage backup on pagehide');
+    } catch (err) {
+      console.error('[Backup] Failed to create localStorage backup:', err);
+    }
+  }
+  
+  // Also attempt async save
   persistContent(true);
 });
 
