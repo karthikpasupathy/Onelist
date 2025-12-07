@@ -279,9 +279,40 @@ function subscribeToDocument() {
           localUpdatedAt = serverUpdatedAt;
           console.log(`[Sync] Loaded server version (${new Date(serverUpdatedAt).toISOString()})`);
         } else if (serverUpdatedAt < localUpdatedAt) {
-          // Our local version is newer - re-save to sync
-          console.log('[Sync] Local version newer, re-syncing to server');
-          scheduleSave();
+          // Timestamps disagree (likely clock skew or cross-device editing).
+          // If the content differs, protect local content via a snapshot,
+          // then accept server content so remote edits are not ignored.
+          if ($editor.value !== doc.content) {
+            console.log('[Sync] Timestamp conflict and content mismatch. Snapshotting local, applying server.');
+            
+            const localContent = $editor.value;
+            const snapshotNow = Date.now();
+            const conflictSnapshotId = id();
+            
+            db.transact([
+              tx.snapshots[conflictSnapshotId].update({
+                userId: currentUser.id,
+                content: localContent,
+                createdAt: snapshotNow,
+                pinned: true,
+              }),
+            ]).catch(err => {
+              console.error('[Sync] Error saving conflict snapshot:', err);
+            });
+            
+            const cursorPos = $editor.selectionStart;
+            $editor.value = doc.content || '';
+            if (cursorPos <= $editor.value.length) {
+              $editor.selectionStart = $editor.selectionEnd = cursorPos;
+            }
+            updateLineCounter();
+          } else {
+            console.log('[Sync] Timestamp conflict but content is identical. No change needed.');
+          }
+          
+          // Always align our local timestamp to server after resolving
+          localUpdatedAt = serverUpdatedAt;
+          console.log(`[Sync] Resolved conflict in favor of server (${new Date(serverUpdatedAt).toISOString()})`);
         } else {
           // Timestamps match - we're in sync
           console.log('[Sync] Already in sync');
