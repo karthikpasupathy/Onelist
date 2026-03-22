@@ -1,5 +1,7 @@
 // main.js - OneList with InstantDB
-import { init, tx, id } from 'https://cdn.jsdelivr.net/npm/@instantdb/core/+esm';
+import { init, tx, id } from '@instantdb/core';
+import { createSaveCoordinator } from './saveCoordinator.js';
+import { expandSnippetCommand } from './snippetExpansion.js';
 
 // Read InstantDB App ID from environment variable
 // Users must set VITE_INSTANT_APP_ID in their Vercel environment variables
@@ -74,13 +76,13 @@ let currentDocId = null;
 let currentYear = new Date().getFullYear();
 let currentSearchScope = 'current';
 let saveTimer = null;
-let isSaving = false;
 let lastSaveStatus = 'saved'; // 'saving', 'saved', 'offline'
 let localUpdatedAt = 0; // Track local version timestamp
 let isSwitchingYear = false;
 let hasMigratedLegacyDoc = false;
 const documentsByYear = new Map();
 const pendingDocumentYears = new Set();
+const snippetsByName = new Map();
 
 // Text formatting state
 const DEFAULT_FONT_SIZE = 14;
@@ -94,6 +96,45 @@ let currentFontFamily = DEFAULT_FONT_FAMILY;
 let currentEditingSnippetId = null;
 let lastSnapshotTime = 0;
 let newYearResolver = null;
+let snippetCache = [];
+
+const saveCoordinator = createSaveCoordinator({
+  onStateChange: updateSaveIndicator,
+  async saveContent({ content }) {
+    if (!currentDocId || !currentUser) {
+      return { skipped: true };
+    }
+
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return { skipped: true, status: 'offline' };
+    }
+
+    const docId = currentDocId;
+    const year = currentYear;
+    const now = Date.now();
+
+    await db.transact([
+      tx.documents[docId].update({
+        content,
+        updatedAt: now,
+      }),
+    ]);
+
+    const currentDoc = documentsByYear.get(year);
+    if (currentDoc?.id === docId) {
+      documentsByYear.set(year, {
+        ...currentDoc,
+        content,
+        updatedAt: now,
+      });
+    }
+
+    localUpdatedAt = now;
+    console.log(`[Sync] Saved to server (${new Date(now).toISOString()})`);
+    await saveSnapshot(content, year);
+    return { updatedAt: now };
+  },
+});
 
 // Auth state listener
 db.subscribeAuth((auth) => {
@@ -110,6 +151,9 @@ db.subscribeAuth((auth) => {
     currentUser = null;
     currentDocId = null;
     documentsByYear.clear();
+    clearSnippetCache();
+    clearSaveTimer();
+    saveCoordinator.reset('');
     currentYear = getStoredYear();
     hasMigratedLegacyDoc = false;
     localUpdatedAt = 0;
@@ -316,7 +360,12 @@ function subscribeToDocument() {
       },
     },
     (resp) => {
-      // Snippets loaded - will be used in modal
+      if (resp.error) {
+        console.error('[Snippet Subscription] Error:', resp.error);
+        return;
+      }
+
+      setSnippetCache(resp.data?.snippets || []);
     }
   );
 
@@ -393,6 +442,11 @@ async function createDocument(year = currentYear) {
     if (year === currentYear) {
       currentDocId = docId;
       localUpdatedAt = nextDoc.updatedAt;
+      if ($editor.value === nextDoc.content) {
+        syncSaveTracking();
+      } else {
+        persistContent(true).catch(handleSaveError);
+      }
     }
     renderYearOptions();
   } catch (err) {
@@ -489,13 +543,12 @@ function hydrateEditorFromDocument(doc) {
       console.log('[Recovery] Found newer backup! Restoring lost content...');
       $editor.value = backupContent;
       localUpdatedAt = backupTime;
+      saveCoordinator.markDirty(backupContent);
       persistContent(true).then(() => {
         console.log('[Recovery] Successfully restored and saved backup to server');
         localStorage.removeItem(`onelist_backup_${doc.id}`);
         localStorage.removeItem(`onelist_backup_time_${doc.id}`);
-      }).catch(err => {
-        console.error('[Recovery] Failed to save restored backup:', err);
-      });
+      }).catch(handleSaveError);
       updateLineCounter();
       return;
     }
@@ -516,6 +569,7 @@ function hydrateEditorFromDocument(doc) {
 
   localUpdatedAt = serverUpdatedAt;
   lastSnapshotTime = 0;
+  syncSaveTracking();
   updateLineCounter();
   console.log(`[Sync] Loaded year ${doc.year} (${new Date(serverUpdatedAt || Date.now()).toISOString()})`);
 }
@@ -564,10 +618,7 @@ $yearSelect.addEventListener('change', async () => {
   const nextYear = parseInt(selectedValue, 10);
   if (!Number.isInteger(nextYear) || nextYear === currentYear) return;
 
-  if (saveTimer) {
-    clearTimeout(saveTimer);
-    saveTimer = null;
-  }
+  clearSaveTimer();
   await persistContent(true);
 
   const doc = documentsByYear.get(nextYear);
@@ -581,6 +632,7 @@ $yearSelect.addEventListener('change', async () => {
   currentDocId = null;
   renderYearOptions();
   $editor.value = '';
+  syncSaveTracking();
   updateLineCounter();
   await createDocument(nextYear);
 });
@@ -594,10 +646,7 @@ $btnExportYearMenu.addEventListener('click', () => {
 });
 
 $btnExportAllMenu.addEventListener('click', async () => {
-  if (saveTimer) {
-    clearTimeout(saveTimer);
-    saveTimer = null;
-  }
+  clearSaveTimer();
   await persistContent(true);
   exportAllYears();
   $profileDropdown.setAttribute('aria-hidden', 'true');
@@ -712,7 +761,6 @@ function handleSlashCommands() {
       $editor.value = replaced;
       const newPos = lineStart + replacement.length;
       $editor.selectionStart = $editor.selectionEnd = newPos;
-      scheduleSave();
       return;
     }
   } else {
@@ -727,52 +775,24 @@ function handleSlashCommands() {
 
   const newPos = start + replacement.length;
   $editor.selectionStart = $editor.selectionEnd = newPos;
-  scheduleSave();
 }
 
-async function handleSnippetCommand(snippetName, start, before, after) {
-  if (!currentUser) return;
+function handleSnippetCommand(snippetName, start, before, after) {
+  const snippet = snippetsByName.get(snippetName);
+  if (!snippet?.content) return;
 
-  const { data } = await db.queryOnce({
-    snippets: {
-      $: {
-        where: {
-          userId: currentUser.id,
-          name: snippetName,
-        },
-      },
-    },
+  const expanded = expandSnippetCommand({
+    after,
+    before,
+    snippetContent: snippet.content,
+    snippetName,
+    start,
   });
+  if (!expanded) return;
 
-  const snippets = data?.snippets || [];
-  if (snippets.length === 0) return; // Snippet not found, leave as-is
-
-  const snippet = snippets[0];
-  const token = `/${snippetName}`;
-  const lineStart = before.lastIndexOf('\n') + 1;
-  const currentLine = before.slice(lineStart);
-
-  // Check if the line is just "- /snippetname"
-  if (currentLine.trim() === `- ${token}`) {
-    // Replace entire bullet point with snippet content
-    const beforeLineStart = before.slice(0, lineStart);
-    const snippetLines = snippet.content.split('\n');
-    const replacement = snippetLines.join('\n');
-    const replaced = beforeLineStart + replacement + after;
-    $editor.value = replaced;
-    const newPos = beforeLineStart.length + replacement.length;
-    $editor.selectionStart = $editor.selectionEnd = newPos;
-  } else {
-    // Append to next line
-    const snippetLines = snippet.content.split('\n');
-    const replacement = '\n' + snippetLines.join('\n');
-    const replaced = $editor.value.slice(0, start) + replacement + after;
-    $editor.value = replaced;
-    const newPos = start + replacement.length;
-    $editor.selectionStart = $editor.selectionEnd = newPos;
-  }
-
-  scheduleSave();
+  $editor.value = expanded.value;
+  $editor.selectionStart = expanded.selectionStart;
+  $editor.selectionEnd = expanded.selectionEnd;
 }
 
 // Search
@@ -924,10 +944,7 @@ async function focusSearchResult(year, lineIndex, searchTerm) {
   closeModal($searchModal);
 
   if (year !== currentYear) {
-    if (saveTimer) {
-      clearTimeout(saveTimer);
-      saveTimer = null;
-    }
+    clearSaveTimer();
     await persistContent(true);
     loadYearDocument(year);
   }
@@ -943,65 +960,26 @@ function waitForNextFrame() {
 
 // Save (throttled) + snapshots
 function scheduleSave() {
-  if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(persistContent, 300); // Reduced from 800ms to 300ms
-  updateSaveIndicator('saving');
+  saveCoordinator.markDirty($editor.value);
+  clearSaveTimer();
+  saveTimer = setTimeout(() => {
+    persistContent().catch(handleSaveError);
+  }, 300);
 }
 
 async function persistContent(isForced = false) {
-  if (!currentDocId || !currentUser) return;
-  
-  // For forced saves (lifecycle events), bypass the isSaving lock
-  if (!isForced && isSaving) return; // Prevent concurrent non-forced saves
-  
-  if (!isForced) {
-    isSaving = true;
-  }
-  
-  const content = $editor.value;
-  const now = Date.now();
-  
   try {
-    updateSaveIndicator('saving');
-    
-    await db.transact([
-      tx.documents[currentDocId].update({
-        content,
-        updatedAt: now,
-      }),
-    ]);
-
-    const currentDoc = documentsByYear.get(currentYear);
-    if (currentDoc) {
-      documentsByYear.set(currentYear, {
-        ...currentDoc,
-        content,
-        updatedAt: now,
-      });
-    }
-
-    // Update local timestamp after successful save
-    localUpdatedAt = now;
-    console.log(`[Sync] Saved to server (${new Date(now).toISOString()})`);
-
-    // Create snapshot every save (we'll limit in UI)
-    await saveSnapshot(content);
-    
-    updateSaveIndicator('saved');
+    return await saveCoordinator.flush({ forced: isForced });
   } catch (err) {
-    console.error('Error saving document:', err);
-    updateSaveIndicator('error');
+    handleSaveError(err);
     if (!isForced) {
       alert('Failed to save your document. Please try again.');
     }
-  } finally {
-    if (!isForced) {
-      isSaving = false;
-    }
+    return false;
   }
 }
 
-async function saveSnapshot(content) {
+async function saveSnapshot(content, year = currentYear) {
   if (!currentUser) return;
 
   // Optimization: Only save snapshot if enough time has passed
@@ -1016,7 +994,7 @@ async function saveSnapshot(content) {
     await db.transact([
       tx.snapshots[snapshotId].update({
         userId: currentUser.id,
-        year: currentYear,
+        year,
         content,
         createdAt: now,
         pinned: false,
@@ -1047,10 +1025,7 @@ async function promptForNewYear() {
 
   const nextYear = parseInt(normalizedInput, 10);
 
-  if (saveTimer) {
-    clearTimeout(saveTimer);
-    saveTimer = null;
-  }
+  clearSaveTimer();
   await persistContent(true);
 
   if (documentsByYear.has(nextYear)) {
@@ -1063,6 +1038,7 @@ async function promptForNewYear() {
   currentDocId = null;
   renderYearOptions();
   $editor.value = '';
+  syncSaveTracking();
   localUpdatedAt = 0;
   updateLineCounter();
   await createDocument(nextYear);
@@ -1219,6 +1195,7 @@ function appendSnapshotItem(snapshot, $list, isPinned) {
   restoreBtn.title = 'Restore';
   restoreBtn.addEventListener('click', async () => {
     $editor.value = snapshot.content || '';
+    syncSaveTracking();
     scheduleSave();
     closeModal($snapshotsModal);
   });
@@ -1365,20 +1342,14 @@ $editor.addEventListener('keydown', (e) => {
 document.addEventListener('visibilitychange', async () => {
   if (document.hidden) {
     // User switched away - save immediately and wait for completion!
-    if (saveTimer) {
-      clearTimeout(saveTimer);
-      saveTimer = null;
-    }
+    clearSaveTimer();
     await persistContent(true);
   }
 });
 
 // Save immediately when user closes tab/window
 window.addEventListener('beforeunload', (e) => {
-  if (saveTimer) {
-    clearTimeout(saveTimer);
-    saveTimer = null;
-  }
+  clearSaveTimer();
   
   // Create localStorage backup as safety net (synchronous)
   if (currentDocId && currentUser && $editor) {
@@ -1399,10 +1370,7 @@ window.addEventListener('beforeunload', (e) => {
 
 // Save immediately on page hide (more reliable on mobile PWA)
 window.addEventListener('pagehide', (e) => {
-  if (saveTimer) {
-    clearTimeout(saveTimer);
-    saveTimer = null;
-  }
+  clearSaveTimer();
   
   // Create localStorage backup as safety net (synchronous)
   if (currentDocId && currentUser && $editor) {
@@ -1597,20 +1565,7 @@ $btnResetFormat.addEventListener('click', () => {
 // Snippets modal
 async function showSnippetsModal() {
   if (!currentUser) return;
-
-  const { data } = await db.queryOnce({
-    snippets: {
-      $: {
-        where: {
-          userId: currentUser.id,
-        },
-      },
-    },
-  });
-
-  const snippets = (data?.snippets || []).sort(
-    (a, b) => (a.name || '').localeCompare(b.name || '')
-  );
+  const snippets = snippetCache;
 
   $snippetList.innerHTML = '';
 
@@ -1641,6 +1596,7 @@ async function showSnippetsModal() {
       deleteBtn.addEventListener('click', async () => {
         if (confirm(`Delete snippet /${snippet.name}?`)) {
           await db.transact([tx.snippets[snippet.id].delete()]);
+          removeSnippetFromCache(snippet.id);
           showSnippetsModal();
         }
       });
@@ -1716,25 +1672,45 @@ $btnSaveSnippet.addEventListener('click', async () => {
   try {
     if (currentEditingSnippetId) {
       // Update existing snippet
+      const updatedAt = Date.now();
       await db.transact([
         tx.snippets[currentEditingSnippetId].update({
           name,
           content,
-          updatedAt: Date.now(),
+          updatedAt,
         }),
       ]);
+      const existingSnippet = snippetCache.find(
+        (snippet) => snippet.id === currentEditingSnippetId
+      );
+      upsertSnippetCache({
+        ...(existingSnippet || {}),
+        id: currentEditingSnippetId,
+        name,
+        content,
+        updatedAt,
+      });
     } else {
       // Create new snippet
       const snippetId = id();
+      const createdAt = Date.now();
       await db.transact([
         tx.snippets[snippetId].update({
           userId: currentUser.id,
           name,
           content,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
+          createdAt,
+          updatedAt: createdAt,
         }),
       ]);
+      upsertSnippetCache({
+        createdAt,
+        id: snippetId,
+        name,
+        content,
+        updatedAt: createdAt,
+        userId: currentUser.id,
+      });
     }
 
     showSnippetsModal();
@@ -1781,3 +1757,46 @@ async function showSettingsModal() {
 $btnSaveSettings.addEventListener('click', () => {
   closeModal($settingsModal);
 });
+
+function clearSaveTimer() {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+}
+
+function handleSaveError(err) {
+  console.error('Error saving document:', err);
+}
+
+function syncSaveTracking() {
+  saveCoordinator.reset($editor.value);
+}
+
+function clearSnippetCache() {
+  snippetCache = [];
+  snippetsByName.clear();
+}
+
+function setSnippetCache(snippets) {
+  snippetCache = [...snippets].sort(
+    (a, b) => (a.name || '').localeCompare(b.name || '')
+  );
+  snippetsByName.clear();
+
+  snippetCache.forEach((snippet) => {
+    if (snippet.name) {
+      snippetsByName.set(snippet.name, snippet);
+    }
+  });
+}
+
+function upsertSnippetCache(snippet) {
+  const nextSnippets = snippetCache.filter((entry) => entry.id !== snippet.id);
+  nextSnippets.push(snippet);
+  setSnippetCache(nextSnippets);
+}
+
+function removeSnippetFromCache(snippetId) {
+  setSnippetCache(snippetCache.filter((snippet) => snippet.id !== snippetId));
+}

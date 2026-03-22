@@ -17,21 +17,20 @@ A simple, classy productivity text editor inspired by Jeff Huang's "never-ending
 ```bash
 npm install
 npm run dev
+npm test
 ```
 
 ## Deploy to Vercel
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fkarthikpasupathy%2FOnelist&env=VITE_INSTANT_APP_ID,OPENAI_API_KEY&envDescription=Required%20API%20keys%20for%20OneList&envLink=https%3A%2F%2Fgithub.com%2Fkarthikpasupathy%2FOnelist%23setup)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fkarthikpasupathy%2FOnelist&env=VITE_INSTANT_APP_ID&envDescription=Required%20InstantDB%20App%20ID%20for%20OneList&envLink=https%3A%2F%2Fgithub.com%2Fkarthikpasupathy%2FOnelist%23setup)
 
 ### Setup Instructions
 
 1. Click the "Deploy with Vercel" button above
 2. Create a new InstantDB app at [instantdb.com](https://instantdb.com)
-3. Get your OpenAI API key from [platform.openai.com](https://platform.openai.com/api-keys)
-4. Add these environment variables in Vercel:
+3. Add this environment variable in Vercel:
    - `VITE_INSTANT_APP_ID` - Your InstantDB App ID
-   - `OPENAI_API_KEY` - Your OpenAI API Key
-5. Deploy!
+4. Deploy!
 
 ### Manual Deployment
 

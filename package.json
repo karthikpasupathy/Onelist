@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "npm run build && node --test tests/saveCoordinator.test.js tests/snippetExpansion.test.js tests/buildOutput.test.js"
   },
   "devDependencies": {
     "vercel": "^48.12.1",
