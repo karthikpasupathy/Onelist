@@ -125,11 +125,27 @@ button:active {
   text-align: center;
 }
 
+.auth-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.auth-logo {
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+  box-shadow: 0 20px 38px rgba(191, 177, 89, 0.22);
+  flex: 0 0 auto;
+}
+
 .auth-card h1 {
   font-size: 2rem;
   font-weight: 650;
   letter-spacing: -0.04em;
-  margin-bottom: 8px;
+  margin-bottom: 0;
 }
 
 .auth-card p {
@@ -900,6 +916,17 @@ div[style*="z-index: 2147483647"] {
   .auth-card,
   .caution-box {
     border-radius: 22px;
+  }
+
+  .auth-brand {
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+
+  .auth-logo {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
   }
 
   .brand {
