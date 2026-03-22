@@ -1821,7 +1821,7 @@ $btnUpdateRefresh?.addEventListener('click', async () => {
       }
     }
 
-    await updateServiceWorker(true);
+    await applyAppUpdate();
   } catch (err) {
     console.error('[PWA] Failed to apply update:', err);
     showUpdateBanner('Refresh failed. Please try again.');
@@ -1851,6 +1851,58 @@ function syncSaveTracking() {
 function hasUnsavedEditorChanges() {
   const state = saveCoordinator.getState();
   return state.pendingSave || state.editorRevision > state.lastSavedRevision;
+}
+
+async function applyAppUpdate() {
+  if (typeof window === 'undefined') return;
+
+  if (!('serviceWorker' in navigator)) {
+    forceReloadToLatestVersion();
+    return;
+  }
+
+  await new Promise((resolve, reject) => {
+    let settled = false;
+    let fallbackTimer = null;
+
+    const cleanup = () => {
+      if (fallbackTimer !== null) {
+        window.clearTimeout(fallbackTimer);
+      }
+      navigator.serviceWorker.removeEventListener('controllerchange', handleControllerChange);
+    };
+
+    const finishWithReload = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      forceReloadToLatestVersion();
+      resolve();
+    };
+
+    const handleControllerChange = () => {
+      finishWithReload();
+    };
+
+    navigator.serviceWorker.addEventListener('controllerchange', handleControllerChange);
+    fallbackTimer = window.setTimeout(() => {
+      console.warn('[PWA] controllerchange did not fire in time. Falling back to hard reload.');
+      finishWithReload();
+    }, 1800);
+
+    updateServiceWorker(true).catch((err) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    });
+  });
+}
+
+function forceReloadToLatestVersion() {
+  const nextUrl = new URL(window.location.href);
+  nextUrl.searchParams.set('app-update', Date.now().toString());
+  window.location.replace(nextUrl.toString());
 }
 
 function showUpdateBanner(message) {
