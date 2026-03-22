@@ -1,11 +1,24 @@
+import { createRequire } from 'node:module'
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
+const require = createRequire(import.meta.url)
+const { version } = require('./package.json')
+const buildId = process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || 'local'
+
 export default defineConfig({
+    define: {
+        __APP_BUILD__: JSON.stringify(buildId),
+        __APP_VERSION__: JSON.stringify(version)
+    },
     plugins: [
         VitePWA({
-            registerType: 'autoUpdate',
+            injectRegister: false,
+            registerType: 'prompt',
             includeAssets: ['icon-192.png', 'icon-512.png'],
+            workbox: {
+                cleanupOutdatedCaches: true
+            },
             manifest: {
                 name: 'OneList - Productivity Editor',
                 short_name: 'OneList',

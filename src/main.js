@@ -1,11 +1,15 @@
 // main.js - OneList with InstantDB
 import { init, tx, id } from '@instantdb/core';
+import { registerSW } from 'virtual:pwa-register';
 import { createSaveCoordinator } from './saveCoordinator.js';
 import { expandSnippetCommand } from './snippetExpansion.js';
 
 // Read InstantDB App ID from environment variable
 // Users must set VITE_INSTANT_APP_ID in their Vercel environment variables
 const APP_ID = import.meta.env.VITE_INSTANT_APP_ID;
+const APP_VERSION = __APP_VERSION__;
+const APP_BUILD = __APP_BUILD__;
+const APP_RELEASE = APP_BUILD === 'local' ? `v${APP_VERSION}` : `v${APP_VERSION} (${APP_BUILD})`;
 
 if (!APP_ID) {
   throw new Error('Missing VITE_INSTANT_APP_ID environment variable. Please configure it in Vercel project settings.');
@@ -70,6 +74,11 @@ const $btnConfirmNewYear = document.getElementById('btn-confirm-new-year');
 const $lineCounter = document.getElementById('line-counter');
 const $lineCount = document.getElementById('line-count');
 const $wordCount = document.getElementById('word-count');
+const $updateBanner = document.getElementById('update-banner');
+const $updateBannerMessage = document.getElementById('update-banner-message');
+const $btnUpdateDismiss = document.getElementById('btn-update-dismiss');
+const $btnUpdateRefresh = document.getElementById('btn-update-refresh');
+const $appVersion = document.getElementById('app-version');
 
 let currentUser = null;
 let currentDocId = null;
@@ -97,6 +106,23 @@ let currentEditingSnippetId = null;
 let lastSnapshotTime = 0;
 let newYearResolver = null;
 let snippetCache = [];
+let hasPendingAppUpdate = false;
+let isApplyingAppUpdate = false;
+
+const updateServiceWorker = registerSW({
+  immediate: true,
+  onNeedRefresh() {
+    hasPendingAppUpdate = true;
+    showUpdateBanner(
+      typeof navigator !== 'undefined' && !navigator.onLine
+        ? 'Update is ready. Reconnect, then refresh when you are ready.'
+        : 'Refresh to load the latest version.'
+    );
+  },
+  onOfflineReady() {
+    console.log('[PWA] Offline support is ready.');
+  },
+});
 
 const saveCoordinator = createSaveCoordinator({
   onStateChange: updateSaveIndicator,
@@ -169,6 +195,10 @@ function showAuth() {
 function showApp() {
   $authScreen.style.display = 'none';
   $app.style.display = 'flex';
+
+  if ($appVersion) {
+    $appVersion.textContent = APP_RELEASE;
+  }
 }
 
 // Send magic code
@@ -1397,6 +1427,9 @@ window.addEventListener('online', () => {
   if (currentDocId && currentUser) {
     persistContent(true);
   }
+  if (hasPendingAppUpdate && $updateBanner?.getAttribute('aria-hidden') !== 'false') {
+    showUpdateBanner('Update is ready. Refresh when you are ready.');
+  }
 });
 
 window.addEventListener('offline', () => {
@@ -1758,6 +1791,48 @@ $btnSaveSettings.addEventListener('click', () => {
   closeModal($settingsModal);
 });
 
+$btnUpdateDismiss?.addEventListener('click', () => {
+  if (isApplyingAppUpdate) return;
+  hideUpdateBanner();
+});
+
+$btnUpdateRefresh?.addEventListener('click', async () => {
+  if (!hasPendingAppUpdate || isApplyingAppUpdate) return;
+
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    showUpdateBanner('Reconnect to the internet before refreshing to the latest version.');
+    return;
+  }
+
+  isApplyingAppUpdate = true;
+  $btnUpdateRefresh.disabled = true;
+  $btnUpdateDismiss.disabled = true;
+  $btnUpdateRefresh.textContent = 'Refreshing...';
+  showUpdateBanner('Saving any pending changes, then refreshing...');
+
+  try {
+    clearSaveTimer();
+
+    if (hasUnsavedEditorChanges()) {
+      await persistContent(true);
+      if (hasUnsavedEditorChanges()) {
+        showUpdateBanner('We could not save your latest changes yet. Please try again in a moment.');
+        return;
+      }
+    }
+
+    await updateServiceWorker(true);
+  } catch (err) {
+    console.error('[PWA] Failed to apply update:', err);
+    showUpdateBanner('Refresh failed. Please try again.');
+  } finally {
+    isApplyingAppUpdate = false;
+    $btnUpdateRefresh.disabled = false;
+    $btnUpdateDismiss.disabled = false;
+    $btnUpdateRefresh.textContent = 'Refresh';
+  }
+});
+
 function clearSaveTimer() {
   if (saveTimer) {
     clearTimeout(saveTimer);
@@ -1771,6 +1846,25 @@ function handleSaveError(err) {
 
 function syncSaveTracking() {
   saveCoordinator.reset($editor.value);
+}
+
+function hasUnsavedEditorChanges() {
+  const state = saveCoordinator.getState();
+  return state.pendingSave || state.editorRevision > state.lastSavedRevision;
+}
+
+function showUpdateBanner(message) {
+  if (!$updateBanner) return;
+
+  if ($updateBannerMessage) {
+    $updateBannerMessage.textContent = message;
+  }
+  $updateBanner.setAttribute('aria-hidden', 'false');
+}
+
+function hideUpdateBanner() {
+  if (!$updateBanner) return;
+  $updateBanner.setAttribute('aria-hidden', 'true');
 }
 
 function clearSnippetCache() {

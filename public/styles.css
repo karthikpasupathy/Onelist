@@ -292,6 +292,53 @@ button:active {
   background: rgba(212, 91, 75, 0.12);
 }
 
+.update-banner {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 90;
+  display: none;
+  align-items: center;
+  gap: 18px;
+  width: min(520px, calc(100vw - 28px));
+  padding: 16px 18px;
+  border: 1px solid rgba(127, 117, 101, 0.18);
+  border-radius: 18px;
+  background: rgba(255, 251, 244, 0.96);
+  box-shadow: 0 14px 36px rgba(95, 74, 46, 0.16);
+  backdrop-filter: blur(14px);
+}
+
+.update-banner[aria-hidden="false"] {
+  display: flex;
+}
+
+.update-banner-copy {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.update-banner-copy strong {
+  font-size: 0.98rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.update-banner-copy span {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.update-banner-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }
@@ -635,6 +682,12 @@ button:active {
   color: var(--muted);
 }
 
+.settings-meta {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
 .snapshot-group-header {
   padding: 18px 0 8px !important;
   border-bottom: none !important;
@@ -837,6 +890,19 @@ div[style*="z-index: 2147483647"] {
 
   .save-indicator.saving::after {
     animation: pulse 1.4s ease-in-out infinite;
+  }
+
+  .update-banner {
+    right: 14px;
+    bottom: 14px;
+    left: 14px;
+    width: auto;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .update-banner-actions {
+    justify-content: flex-end;
   }
 
   .year-select {
