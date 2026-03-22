@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#0a0a0a" />
+    <meta name="theme-color" content="#e9d4ab" />
     
     <!-- Open Graph / Social Media -->
     <meta property="og:type" content="website" />
@@ -15,8 +15,13 @@
     <meta name="twitter:description" content="A never-ending productivity text file" />
     <meta name="twitter:image" content="/Onelist - OG image.png" />
 
-    <title>OneList - Home</title>
-    <link rel="icon" type="image/svg+xml" href="/icon-192.svg" />
+    <title>OneList</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:opsz,wght@8..144,300..800&display=swap" rel="stylesheet" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
     <link rel="stylesheet" href="/styles.css" />
     <script src="https://unpkg.com/lucide@latest"></script>
   </head>
@@ -49,12 +54,17 @@
     <!-- Main App -->
     <div id="app" class="app" style="display: none;">
       <header class="topbar">
-        <div class="logo">OneList</div>
+        <div class="brand">
+          <img class="brand-icon" src="/icon-192.png" alt="OneList icon" />
+          <div class="brand-copy">
+            <div class="logo">OneList</div>
+            <span id="save-indicator" class="save-indicator" style="display: none;">Saved</span>
+          </div>
+        </div>
         <div class="actions">
-          <span id="save-indicator" class="save-indicator" style="display: none;">Saved</span>
-          <button id="btn-ai-chat" class="icon-btn" title="AI Insights">
-            <i data-lucide="wand-sparkles" width="20" height="20"></i>
-          </button>
+          <label class="year-select-wrap" for="year-select">
+            <select id="year-select" class="year-select" aria-label="Select year"></select>
+          </label>
           <button id="btn-search-modal" class="icon-btn" title="Search">
             <i data-lucide="search" width="20" height="20"></i>
           </button>
@@ -65,7 +75,8 @@
             <div id="profile-dropdown" class="dropdown" aria-hidden="true">
               <div id="user-email" class="user-email"></div>
               <button id="btn-text-format-menu">Font Size</button>
-              <button id="btn-export-menu">Export</button>
+              <button id="btn-export-year-menu">Export This Year</button>
+              <button id="btn-export-all-menu">Export All Years</button>
               <button id="btn-snapshots-menu">Snapshots</button>
               <button id="btn-snippets-menu">Snippets</button>
               <button id="btn-settings-menu">Settings</button>
@@ -99,10 +110,21 @@
 
       <!-- Search Modal -->
       <div id="search-modal" class="modal" aria-hidden="true">
-        <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="search-title">
+        <div class="modal-content search-modal-content" role="dialog" aria-modal="true" aria-labelledby="search-title">
           <button class="modal-close" aria-label="Close">×</button>
           <h2 id="search-title">Search</h2>
-          <input id="search-input" type="search" placeholder="Search or #tag…" autocomplete="off" />
+          <div class="search-controls">
+            <input id="search-input" type="search" placeholder="Search or #tag..." autocomplete="off" />
+            <label class="search-scope-wrap" for="search-scope-select">
+              <select id="search-scope-select" class="search-scope-select" aria-label="Search scope">
+                <option value="current">This year</option>
+                <option value="all">All years</option>
+              </select>
+            </label>
+            <button id="btn-run-search" class="search-run-btn" type="button" aria-label="Run search">
+              <i data-lucide="search" width="20" height="20"></i>
+            </button>
+          </div>
           <section id="search-results-modal" class="search-results" aria-live="polite"></section>
         </div>
       </div>
@@ -125,7 +147,7 @@
           <div class="format-section">
             <label>Font Family</label>
             <select id="font-family-select">
-              <option value="monospace">Monospace (Default)</option>
+              <option value="google-sans-flex">Google Sans Flex (Default)</option>
               <option value="serif">Serif</option>
               <option value="sans-serif">Sans Serif</option>
               <option value="cursive">Cursive</option>
@@ -172,49 +194,6 @@
         </div>
       </div>
 
-      <!-- AI Insights Modal -->
-      <div id="ai-actions-modal" class="modal" aria-hidden="true">
-        <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="ai-actions-title">
-          <button class="modal-close" aria-label="Close">×</button>
-          <h2 id="ai-actions-title">AI Insights</h2>
-
-          <!-- Desktop: Button Grid -->
-          <div class="ai-actions-grid">
-            <button class="action-btn" data-action="weekly">
-              <i data-lucide="calendar-range" width="18" height="18"></i>
-              <span>Weekly Highlights</span>
-            </button>
-            <button class="action-btn" data-action="monthly">
-              <i data-lucide="calendar-clock" width="18" height="18"></i>
-              <span>Monthly Overview</span>
-            </button>
-            <button class="action-btn" data-action="mental">
-              <i data-lucide="brain" width="18" height="18"></i>
-              <span>Mental Health Today</span>
-            </button>
-            <button class="action-btn" data-action="plan">
-              <i data-lucide="list-checks" width="18" height="18"></i>
-              <span>Create Plan</span>
-            </button>
-          </div>
-
-          <!-- Mobile: Dropdown -->
-          <div class="ai-actions-dropdown">
-            <label for="ai-action-select">Select an AI action:</label>
-            <select id="ai-action-select">
-              <option value="">Choose an insight...</option>
-              <option value="weekly">Weekly Highlights</option>
-              <option value="monthly">Monthly Overview</option>
-              <option value="mental">Mental Health Today</option>
-              <option value="plan">Create Plan</option>
-            </select>
-            <button id="btn-run-ai-action" class="btn-primary">Analyze</button>
-          </div>
-
-          <section id="ai-actions-result" class="ai-actions-result" aria-live="polite"></section>
-        </div>
-      </div>
-
       <!-- Settings Modal -->
       <div id="settings-modal" class="modal" aria-hidden="true">
         <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="settings-title">
@@ -223,29 +202,31 @@
           
           <div class="settings-container">
             <div class="settings-section">
-              <h3>AI Configuration</h3>
-              <p class="settings-description">Configure OpenAI to analyze your document content. API keys are managed via environment variables.</p>
-              
-              <div class="form-group">
-                <label for="settings-ai-model">Model</label>
-                <select id="settings-ai-model">
-                  <option value="gpt-4o">GPT-4o (Recommended)</option>
-                  <option value="gpt-4o-mini">GPT-4o Mini (Faster)</option>
-                  <option value="gpt-4-turbo">GPT-4 Turbo</option>
-                  <option value="gpt-3.5-turbo">GPT-3.5 Turbo</option>
-                </select>
-              </div>
-              
-              <div class="form-group">
-                <label for="settings-ai-system-prompt">System Prompt</label>
-                <textarea id="settings-ai-system-prompt" placeholder="You are a helpful assistant analyzing my OneList document..." rows="4"></textarea>
-                <small>Customize how the AI should respond to your questions</small>
-              </div>
+              <h3>OneList</h3>
+              <p class="settings-description">Year-based notes, snapshots, snippets, and exports are now available directly from the top bar and profile menu.</p>
             </div>
             
             <div class="settings-actions">
-              <button id="btn-save-settings" class="btn-primary">Save Settings</button>
+              <button id="btn-save-settings" class="btn-primary">Close</button>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- New Year Modal -->
+      <div id="new-year-modal" class="modal" aria-hidden="true">
+        <div class="modal-content new-year-modal-content" role="dialog" aria-modal="true" aria-labelledby="new-year-title">
+          <button class="modal-close" aria-label="Close">×</button>
+          <h2 id="new-year-title">Add New Year</h2>
+          <p class="settings-description">Enter exactly 4 numbers to create a new year note.</p>
+          <div class="form-group">
+            <label for="new-year-input">Year</label>
+            <input id="new-year-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" placeholder="2027" autocomplete="off" />
+          </div>
+          <div id="new-year-error" class="new-year-error" aria-live="polite"></div>
+          <div class="settings-actions">
+            <button id="btn-cancel-new-year" class="btn-secondary">Cancel</button>
+            <button id="btn-confirm-new-year" class="btn-primary">Create</button>
           </div>
         </div>
       </div>

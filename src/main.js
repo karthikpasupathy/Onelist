@@ -24,20 +24,20 @@ const $btnVerifyCode = document.getElementById('btn-verify-code');
 const $btnBack = document.getElementById('btn-back');
 const $btnLogout = document.getElementById('btn-logout');
 const $editor = document.getElementById('editor');
-const $search = document.getElementById('search');
 const $results = document.getElementById('search-results');
-const $btnAppendDate = document.getElementById('btn-append-date');
-const $btnExport = document.getElementById('btn-export');
-const $btnSnapshots = document.getElementById('btn-snapshots');
+const $yearSelect = document.getElementById('year-select');
 const $snapshotsModal = document.getElementById('snapshots-modal');
 const $btnSearchModal = document.getElementById('btn-search-modal');
 const $searchModal = document.getElementById('search-modal');
 const $searchInput = document.getElementById('search-input');
 const $searchResultsModal = document.getElementById('search-results-modal');
+const $searchScopeSelect = document.getElementById('search-scope-select');
+const $btnRunSearch = document.getElementById('btn-run-search');
 const $btnProfile = document.getElementById('btn-profile');
 const $profileDropdown = document.getElementById('profile-dropdown');
 const $userEmail = document.getElementById('user-email');
-const $btnExportMenu = document.getElementById('btn-export-menu');
+const $btnExportYearMenu = document.getElementById('btn-export-year-menu');
+const $btnExportAllMenu = document.getElementById('btn-export-all-menu');
 const $btnSnapshotsMenu = document.getElementById('btn-snapshots-menu');
 const $btnTextFormat = document.getElementById('btn-text-format-menu');
 const $textFormatModal = document.getElementById('text-format-modal');
@@ -57,50 +57,49 @@ const $snippetName = document.getElementById('snippet-name');
 const $snippetContent = document.getElementById('snippet-content');
 const $btnSaveSnippet = document.getElementById('btn-save-snippet');
 const $btnCancelSnippet = document.getElementById('btn-cancel-snippet');
-const $btnAiChat = document.getElementById('btn-ai-chat');
-const $aiActionsModal = document.getElementById('ai-actions-modal');
-const $aiActionsResult = document.getElementById('ai-actions-result');
-const $aiActionSelect = document.getElementById('ai-action-select');
-const $btnRunAiAction = document.getElementById('btn-run-ai-action');
 const $btnSettingsMenu = document.getElementById('btn-settings-menu');
 const $settingsModal = document.getElementById('settings-modal');
-const $settingsAiModel = document.getElementById('settings-ai-model');
-const $settingsAiSystemPrompt = document.getElementById('settings-ai-system-prompt');
 const $btnSaveSettings = document.getElementById('btn-save-settings');
+const $newYearModal = document.getElementById('new-year-modal');
+const $newYearInput = document.getElementById('new-year-input');
+const $newYearError = document.getElementById('new-year-error');
+const $btnCancelNewYear = document.getElementById('btn-cancel-new-year');
+const $btnConfirmNewYear = document.getElementById('btn-confirm-new-year');
 const $lineCounter = document.getElementById('line-counter');
 const $lineCount = document.getElementById('line-count');
 const $wordCount = document.getElementById('word-count');
 
 let currentUser = null;
 let currentDocId = null;
+let currentYear = new Date().getFullYear();
+let currentSearchScope = 'current';
 let saveTimer = null;
 let isSaving = false;
 let lastSaveStatus = 'saved'; // 'saving', 'saved', 'offline'
 let localUpdatedAt = 0; // Track local version timestamp
+let isSwitchingYear = false;
+let hasMigratedLegacyDoc = false;
+const documentsByYear = new Map();
+const pendingDocumentYears = new Set();
 
 // Text formatting state
 const DEFAULT_FONT_SIZE = 14;
 const MIN_FONT_SIZE = 10;
 const MAX_FONT_SIZE = 24;
-const DEFAULT_FONT_FAMILY = 'monospace';
+const DEFAULT_FONT_FAMILY = 'google-sans-flex';
 const SNAPSHOT_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 let currentFontSize = DEFAULT_FONT_SIZE;
 let currentFontFamily = DEFAULT_FONT_FAMILY;
 let currentEditingSnippetId = null;
 let lastSnapshotTime = 0;
-let currentSettingsId = null;
-let currentAiUsageId = null;
-let aiUsageCount = 0;
-let usageResetDate = null;
-
-// AI Usage Constants
-const AI_MONTHLY_LIMIT = 10;
+let newYearResolver = null;
 
 // Auth state listener
 db.subscribeAuth((auth) => {
   if (auth.user) {
     currentUser = auth.user;
+    currentYear = getStoredYear();
     // Update user email display
     if ($userEmail && auth.user.email) {
       $userEmail.textContent = auth.user.email;
@@ -109,6 +108,11 @@ db.subscribeAuth((auth) => {
     subscribeToDocument();
   } else {
     currentUser = null;
+    currentDocId = null;
+    documentsByYear.clear();
+    currentYear = getStoredYear();
+    hasMigratedLegacyDoc = false;
+    localUpdatedAt = 0;
     showAuth();
   }
 });
@@ -200,9 +204,12 @@ $btnLogout.addEventListener('click', () => {
   db.auth.signOut();
 });
 
-// Subscribe to user's document
+// Subscribe to user's documents
 function subscribeToDocument() {
   if (!currentUser) return;
+
+  currentYear = getStoredYear();
+  renderYearOptions();
 
   db.subscribeQuery(
     {
@@ -214,113 +221,40 @@ function subscribeToDocument() {
         },
       },
     },
-    (resp) => {
+    async (resp) => {
       if (resp.error) {
         console.error('Query error:', resp.error);
         return;
       }
 
       const docs = resp.data?.documents || [];
-      if (docs.length > 0) {
-        // Load existing document
-        const doc = docs[0];
-        currentDocId = doc.id;
-        
-        // CRITICAL: Check for localStorage backup and recover if needed
-        const backupContent = localStorage.getItem(`onelist_backup_${doc.id}`);
-        const backupTimeStr = localStorage.getItem(`onelist_backup_time_${doc.id}`);
-        
-        if (backupContent && backupTimeStr) {
-          const backupTime = parseInt(backupTimeStr, 10);
-          const serverTime = doc.updatedAt || 0;
-          
-          // If backup is newer than server, we lost data - restore it!
-          if (backupTime > serverTime) {
-            console.log('[Recovery] Found newer backup! Restoring lost content...');
-            $editor.value = backupContent;
-            localUpdatedAt = backupTime;
-            
-            // Save the recovered content to server immediately
-            persistContent(true).then(() => {
-              console.log('[Recovery] Successfully restored and saved backup to server');
-              // Clean up backup after successful restore
-              localStorage.removeItem(`onelist_backup_${doc.id}`);
-              localStorage.removeItem(`onelist_backup_time_${doc.id}`);
-            }).catch(err => {
-              console.error('[Recovery] Failed to save restored backup:', err);
-            });
-            
-            updateLineCounter();
-            return; // Skip normal load since we restored from backup
-          } else {
-            // Server has newer or equal data, clean up old backup
-            localStorage.removeItem(`onelist_backup_${doc.id}`);
-            localStorage.removeItem(`onelist_backup_time_${doc.id}`);
-          }
-        }
-        
-        // CRITICAL: Only update editor if server version is newer than our local version
-        // This prevents old data from mobile PWA overwriting newer laptop data
-        const serverUpdatedAt = doc.updatedAt || 0;
-        
-        if (serverUpdatedAt > localUpdatedAt) {
-          // Server has newer data - update editor
-          if ($editor.value !== doc.content) {
-            const cursorPos = $editor.selectionStart;
-            $editor.value = doc.content || '';
-            // Restore cursor position if reasonable
-            if (cursorPos <= $editor.value.length) {
-              $editor.selectionStart = $editor.selectionEnd = cursorPos;
-            }
-            // Update line counter after loading content
-            updateLineCounter();
-          }
-          // Update our local timestamp to match server
-          localUpdatedAt = serverUpdatedAt;
-          console.log(`[Sync] Loaded server version (${new Date(serverUpdatedAt).toISOString()})`);
-        } else if (serverUpdatedAt < localUpdatedAt) {
-          // Timestamps disagree (likely clock skew or cross-device editing).
-          // If the content differs, protect local content via a snapshot,
-          // then accept server content so remote edits are not ignored.
-          if ($editor.value !== doc.content) {
-            console.log('[Sync] Timestamp conflict and content mismatch. Snapshotting local, applying server.');
-            
-            const localContent = $editor.value;
-            const snapshotNow = Date.now();
-            const conflictSnapshotId = id();
-            
-            db.transact([
-              tx.snapshots[conflictSnapshotId].update({
-                userId: currentUser.id,
-                content: localContent,
-                createdAt: snapshotNow,
-                pinned: true,
-              }),
-            ]).catch(err => {
-              console.error('[Sync] Error saving conflict snapshot:', err);
-            });
-            
-            const cursorPos = $editor.selectionStart;
-            $editor.value = doc.content || '';
-            if (cursorPos <= $editor.value.length) {
-              $editor.selectionStart = $editor.selectionEnd = cursorPos;
-            }
-            updateLineCounter();
-          } else {
-            console.log('[Sync] Timestamp conflict but content is identical. No change needed.');
-          }
-          
-          // Always align our local timestamp to server after resolving
-          localUpdatedAt = serverUpdatedAt;
-          console.log(`[Sync] Resolved conflict in favor of server (${new Date(serverUpdatedAt).toISOString()})`);
-        } else {
-          // Timestamps match - we're in sync
-          console.log('[Sync] Already in sync');
-        }
-      } else {
-        // Create new document
-        createDocument();
+      documentsByYear.clear();
+
+      const legacyDocs = docs.filter((doc) => !Number.isInteger(doc.year));
+      if (legacyDocs.length && !hasMigratedLegacyDoc) {
+        hasMigratedLegacyDoc = true;
+        await migrateLegacyDocuments(legacyDocs, docs);
+        return;
       }
+
+      docs.forEach((doc) => {
+        const year = Number.isInteger(doc.year) ? doc.year : currentYear;
+        documentsByYear.set(year, doc);
+      });
+
+      if (!documentsByYear.size) {
+        await createDocument(currentYear);
+        return;
+      }
+
+      if (!documentsByYear.has(currentYear)) {
+        const availableYears = getAvailableYears();
+        currentYear = availableYears[0];
+        storeActiveYear(currentYear);
+      }
+
+      renderYearOptions();
+      loadYearDocument(currentYear);
     }
   );
 
@@ -344,27 +278,29 @@ function subscribeToDocument() {
       const snapshots = resp.data?.snapshots || [];
       console.log(`[Snapshot Subscription] Loaded ${snapshots.length} snapshots.`);
 
-      const unpinnedSnapshots = snapshots.filter(s => !s.pinned);
+      const snapshotsByYear = new Map();
+      snapshots.filter((snapshot) => !snapshot.pinned).forEach((snapshot) => {
+        const year = Number.isInteger(snapshot.year) ? snapshot.year : currentYear;
+        if (!snapshotsByYear.has(year)) snapshotsByYear.set(year, []);
+        snapshotsByYear.get(year).push(snapshot);
+      });
 
-      // Keep only the latest 20 unpinned snapshots
-      if (unpinnedSnapshots.length > 20) {
-        console.log(`[Snapshot Cleanup] Found ${unpinnedSnapshots.length} unpinned snapshots. Limit is 20.`);
-        const sorted = unpinnedSnapshots.sort((a, b) => a.createdAt - b.createdAt);
+      snapshotsByYear.forEach((yearSnapshots, year) => {
+        if (yearSnapshots.length <= 20) return;
 
-        // Delete 1 at a time to debug
-        const toDelete = sorted.slice(0, 1);
-        const s = toDelete[0];
-        console.log('[Snapshot Cleanup] Attempting to delete snapshot:', s.id);
+        console.log(`[Snapshot Cleanup] Year ${year} has ${yearSnapshots.length} unpinned snapshots. Limit is 20.`);
+        const sorted = yearSnapshots.sort((a, b) => a.createdAt - b.createdAt);
+        const toDelete = sorted.slice(0, yearSnapshots.length - 20);
 
-        if (toDelete.length > 0) {
-          db.transact([tx.snapshots[s.id].delete()])
-            .then(() => console.log('[Snapshot Cleanup] Successfully deleted snapshot:', s.id))
+        toDelete.forEach((snapshot) => {
+          db.transact([tx.snapshots[snapshot.id].delete()])
+            .then(() => console.log('[Snapshot Cleanup] Successfully deleted snapshot:', snapshot.id))
             .catch(err => {
               console.error('[Snapshot Cleanup] Error deleting snapshot:', err);
               if (err.body) console.error('[Snapshot Cleanup] Error body:', err.body);
             });
-        }
-      }
+        });
+      });
     }
   );
 
@@ -398,48 +334,7 @@ function subscribeToDocument() {
     (resp) => {
       if (resp.error) {
         console.error('[Settings Subscription] Error:', resp.error);
-        return;
       }
-      const settings = resp.data?.settings || [];
-      if (settings.length > 0) {
-        currentSettingsId = settings[0].id;
-      }
-    }
-  );
-
-  // Subscribe to AI usage tracking
-  db.subscribeQuery(
-    {
-      aiUsage: {
-        $: {
-          where: {
-            userId: currentUser.id,
-          },
-        },
-      },
-    },
-    async (resp) => {
-      if (resp.error) {
-        console.error('[AI Usage Subscription] Error:', resp.error);
-        return;
-      }
-      const usageRecords = resp.data?.aiUsage || [];
-      
-      if (usageRecords.length > 0) {
-        const usage = usageRecords[0];
-        currentAiUsageId = usage.id;
-        aiUsageCount = usage.count || 0;
-        usageResetDate = usage.resetDate ? new Date(usage.resetDate) : null;
-        
-        // Check if we need to reset the counter
-        await checkAndResetUsage();
-      } else {
-        // Create initial usage record
-        await initializeAiUsage();
-      }
-      
-      // Update UI if AI modal is open
-      updateAiUsageDisplay();
     }
   );
 
@@ -452,42 +347,177 @@ function subscribeToDocument() {
       }
     });
     const snapshots = data?.snapshots || [];
-    const unpinned = snapshots.filter(s => !s.pinned);
-    console.log(`Manual: Found ${unpinned.length} unpinned snapshots.`);
-    if (unpinned.length > 20) {
-      const sorted = unpinned.sort((a, b) => a.createdAt - b.createdAt);
-      const s = sorted[0];
-      console.log('Manual: Deleting snapshot', s.id);
+    const unpinned = snapshots.filter(s => !s.pinned && (s.year || currentYear) === currentYear);
+    console.log(`Manual: Found ${unpinned.length} unpinned snapshots for ${currentYear}.`);
+    if (unpinned.length <= 20) {
+      console.log('Manual: No cleanup needed.');
+      return;
+    }
+
+    const sorted = unpinned.sort((a, b) => a.createdAt - b.createdAt);
+    const toDelete = sorted.slice(0, unpinned.length - 20);
+
+    for (const snapshot of toDelete) {
       try {
-        await db.transact([tx.snapshots[s.id].delete()]);
-        console.log('Manual: Deleted successfully');
+        await db.transact([tx.snapshots[snapshot.id].delete()]);
+        console.log('Manual: Deleted successfully', snapshot.id);
       } catch (err) {
         console.error('Manual: Delete failed', err);
       }
-    } else {
-      console.log('Manual: No cleanup needed.');
     }
   };
 }
 
-async function createDocument() {
-  if (!currentUser) return;
+async function createDocument(year = currentYear) {
+  if (!currentUser || pendingDocumentYears.has(year)) return;
   const docId = id();
-  currentDocId = docId;
+  pendingDocumentYears.add(year);
+  const createdAt = Date.now();
+  const nextDoc = {
+    id: docId,
+    userId: currentUser.id,
+    year,
+    content: year === currentYear ? $editor.value : '',
+    createdAt,
+    updatedAt: createdAt,
+  };
 
   try {
     await db.transact([
       tx.documents[docId].update({
-        userId: currentUser.id,
-        content: '',
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
+        ...nextDoc,
       }),
     ]);
+
+    documentsByYear.set(year, nextDoc);
+    if (year === currentYear) {
+      currentDocId = docId;
+      localUpdatedAt = nextDoc.updatedAt;
+    }
+    renderYearOptions();
   } catch (err) {
     console.error('Error creating document:', err);
     alert('Failed to create document. Please try refreshing.');
+  } finally {
+    pendingDocumentYears.delete(year);
   }
+}
+
+async function migrateLegacyDocuments(legacyDocs, allDocs) {
+  if (!currentUser || !legacyDocs.length) return;
+
+  const existingYears = new Set(allDocs.filter((doc) => Number.isInteger(doc.year)).map((doc) => doc.year));
+  let targetYear = getStoredYear();
+
+  for (const doc of legacyDocs) {
+    while (existingYears.has(targetYear)) {
+      targetYear -= 1;
+    }
+
+    try {
+      await db.transact([
+        tx.documents[doc.id].update({
+          year: targetYear,
+          updatedAt: doc.updatedAt || Date.now(),
+        }),
+      ]);
+      existingYears.add(targetYear);
+    } catch (err) {
+      console.error('Error migrating legacy document:', err);
+    }
+  }
+}
+
+function getStoredYear() {
+  const stored = parseInt(localStorage.getItem('onelist_active_year') || '', 10);
+  return Number.isInteger(stored) ? stored : new Date().getFullYear();
+}
+
+function storeActiveYear(year) {
+  localStorage.setItem('onelist_active_year', String(year));
+}
+
+function getAvailableYears() {
+  return Array.from(documentsByYear.keys()).sort((a, b) => b - a);
+}
+
+function renderYearOptions() {
+  if (!$yearSelect) return;
+
+  const years = getAvailableYears();
+  if (!years.length) {
+    years.push(currentYear);
+  }
+
+  $yearSelect.innerHTML = '';
+  years.forEach((year) => {
+    const option = document.createElement('option');
+    option.value = String(year);
+    option.textContent = String(year);
+    if (year === currentYear) option.selected = true;
+    $yearSelect.appendChild(option);
+  });
+
+  const addOption = document.createElement('option');
+  addOption.value = '__add_year__';
+  addOption.textContent = '+ Year';
+  $yearSelect.appendChild(addOption);
+}
+
+function loadYearDocument(year) {
+  const doc = documentsByYear.get(year);
+  if (!doc) return;
+
+  currentYear = year;
+  currentDocId = doc.id;
+  storeActiveYear(year);
+  renderYearOptions();
+  hydrateEditorFromDocument(doc);
+}
+
+function hydrateEditorFromDocument(doc) {
+  if (!doc) return;
+
+  const backupContent = localStorage.getItem(`onelist_backup_${doc.id}`);
+  const backupTimeStr = localStorage.getItem(`onelist_backup_time_${doc.id}`);
+
+  if (backupContent && backupTimeStr) {
+    const backupTime = parseInt(backupTimeStr, 10);
+    const serverTime = doc.updatedAt || 0;
+
+    if (backupTime > serverTime) {
+      console.log('[Recovery] Found newer backup! Restoring lost content...');
+      $editor.value = backupContent;
+      localUpdatedAt = backupTime;
+      persistContent(true).then(() => {
+        console.log('[Recovery] Successfully restored and saved backup to server');
+        localStorage.removeItem(`onelist_backup_${doc.id}`);
+        localStorage.removeItem(`onelist_backup_time_${doc.id}`);
+      }).catch(err => {
+        console.error('[Recovery] Failed to save restored backup:', err);
+      });
+      updateLineCounter();
+      return;
+    }
+
+    localStorage.removeItem(`onelist_backup_${doc.id}`);
+    localStorage.removeItem(`onelist_backup_time_${doc.id}`);
+  }
+
+  const serverUpdatedAt = doc.updatedAt || 0;
+  const cursorPos = $editor.selectionStart;
+
+  if ($editor.value !== (doc.content || '')) {
+    $editor.value = doc.content || '';
+    if (cursorPos <= $editor.value.length) {
+      $editor.selectionStart = $editor.selectionEnd = cursorPos;
+    }
+  }
+
+  localUpdatedAt = serverUpdatedAt;
+  lastSnapshotTime = 0;
+  updateLineCounter();
+  console.log(`[Sync] Loaded year ${doc.year} (${new Date(serverUpdatedAt || Date.now()).toISOString()})`);
 }
 
 // Date formatting: dd-MM-yyyy
@@ -521,9 +551,55 @@ document.addEventListener('click', (e) => {
   }
 });
 
+// Year selector
+$yearSelect.addEventListener('change', async () => {
+  const selectedValue = $yearSelect.value;
+
+  if (selectedValue === '__add_year__') {
+    $yearSelect.value = String(currentYear);
+    await promptForNewYear();
+    return;
+  }
+
+  const nextYear = parseInt(selectedValue, 10);
+  if (!Number.isInteger(nextYear) || nextYear === currentYear) return;
+
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  await persistContent(true);
+
+  const doc = documentsByYear.get(nextYear);
+  if (doc) {
+    loadYearDocument(nextYear);
+    return;
+  }
+
+  currentYear = nextYear;
+  storeActiveYear(nextYear);
+  currentDocId = null;
+  renderYearOptions();
+  $editor.value = '';
+  updateLineCounter();
+  await createDocument(nextYear);
+});
+
 // Profile menu buttons
-$btnExportMenu.addEventListener('click', () => {
-  downloadText($editor.value);
+$btnExportYearMenu.addEventListener('click', () => {
+  const doc = documentsByYear.get(currentYear);
+  downloadText(doc?.content || $editor.value, getYearFilename(currentYear));
+  $profileDropdown.setAttribute('aria-hidden', 'true');
+  $editor.focus();
+});
+
+$btnExportAllMenu.addEventListener('click', async () => {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  await persistContent(true);
+  exportAllYears();
   $profileDropdown.setAttribute('aria-hidden', 'true');
   $editor.focus();
 });
@@ -547,31 +623,40 @@ $btnSettingsMenu.addEventListener('click', async () => {
   $profileDropdown.setAttribute('aria-hidden', 'true');
 });
 
-// AI Insights button
-$btnAiChat.addEventListener('click', () => {
-  openModal($aiActionsModal);
-  updateAiUsageDisplay();
-});
-
 // Search modal
 $btnSearchModal.addEventListener('click', () => {
   openModal($searchModal);
+  $searchScopeSelect.value = currentSearchScope;
   $searchInput.focus();
+  if (typeof lucide !== 'undefined') {
+    setTimeout(() => lucide.createIcons(), 0);
+  }
 });
 
-$searchInput.addEventListener('input', () => {
+$btnRunSearch.addEventListener('click', () => {
+  runSearch();
+});
+
+$searchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    runSearch();
+  }
+});
+
+$searchScopeSelect.addEventListener('change', () => {
+  currentSearchScope = $searchScopeSelect.value || 'current';
+  if ($searchInput.value.trim()) {
+    runSearch();
+  }
+});
+
+function runSearch() {
   const q = $searchInput.value.trim();
   $searchResultsModal.innerHTML = '';
   if (!q) return;
 
-  const lines = $editor.value.split('\n');
-  const results = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (line.toLowerCase().includes(q.toLowerCase())) {
-      results.push({ i, line });
-    }
-  }
+  const results = searchDocuments(q);
 
   if (!results.length) {
     const div = document.createElement('div');
@@ -581,17 +666,17 @@ $searchInput.addEventListener('input', () => {
     return;
   }
 
-  results.forEach(({ i, line }) => {
+  results.forEach(({ i, line, year }) => {
     const item = document.createElement('div');
     item.className = 'result';
-    item.innerHTML = `<span class="line-num">#${i + 1}</span>${escapeHtml(line)}`;
-    item.addEventListener('click', () => {
-      focusLine(i);
-      closeModal($searchModal);
+    const yearLabel = currentSearchScope === 'all' ? `<span class="result-year">${year}</span>` : '';
+    item.innerHTML = `${yearLabel}<span class="line-num">#${i + 1}</span>${escapeHtml(line)}`;
+    item.addEventListener('click', async () => {
+      await focusSearchResult(year, i, q);
     });
     $searchResultsModal.appendChild(item);
   });
-});
+}
 
 // Slash commands: /today /tomorrow -> dd-MM-yyyy, /time -> H:M, /line -> 36 hyphens
 function handleSlashCommands() {
@@ -692,7 +777,7 @@ async function handleSnippetCommand(snippetName, start, before, after) {
 
 // Search
 function updateSearchResults() {
-  const q = $search.value.trim();
+  const q = $searchInput.value.trim();
   $results.innerHTML = '';
   if (!q) return;
 
@@ -735,17 +820,125 @@ function escapeHtml(s) {
 }
 
 // Focus line in textarea
-function focusLine(lineIndex) {
+function focusLine(lineIndex, searchTerm = '') {
   const lines = $editor.value.split('\n');
   let offset = 0;
   for (let i = 0; i < lineIndex; i++) {
     offset += lines[i].length + 1; // +1 for newline
   }
+  const lineText = lines[lineIndex] || '';
+  const normalizedSearch = searchTerm.trim().toLowerCase();
+  const matchIndex = normalizedSearch ? lineText.toLowerCase().indexOf(normalizedSearch) : -1;
+  const selectionStart = matchIndex >= 0 ? offset + matchIndex : offset;
+  const selectionEnd = matchIndex >= 0 ? selectionStart + searchTerm.length : offset + lineText.length;
+
   $editor.focus();
-  $editor.selectionStart = $editor.selectionEnd = offset;
-  // Scroll into view
-  const lineHeight = parseFloat(getComputedStyle($editor).lineHeight) || 20;
-  $editor.scrollTop = Math.max(0, lineHeight * Math.max(0, lineIndex - 2));
+  $editor.setSelectionRange(selectionStart, selectionEnd);
+  scrollSelectionIntoView(selectionStart);
+}
+
+function scrollSelectionIntoView(selectionStart) {
+  const computed = window.getComputedStyle($editor);
+  const mirror = document.createElement('div');
+  const marker = document.createElement('span');
+  const textBefore = $editor.value.slice(0, selectionStart);
+
+  const mirroredProperties = [
+    'boxSizing',
+    'width',
+    'paddingTop',
+    'paddingRight',
+    'paddingBottom',
+    'paddingLeft',
+    'borderTopWidth',
+    'borderRightWidth',
+    'borderBottomWidth',
+    'borderLeftWidth',
+    'fontFamily',
+    'fontSize',
+    'fontWeight',
+    'fontStyle',
+    'letterSpacing',
+    'lineHeight',
+    'textTransform',
+    'textIndent',
+    'whiteSpace',
+    'wordBreak',
+    'overflowWrap'
+  ];
+
+  mirror.style.position = 'absolute';
+  mirror.style.visibility = 'hidden';
+  mirror.style.pointerEvents = 'none';
+  mirror.style.whiteSpace = 'pre-wrap';
+  mirror.style.wordBreak = 'break-word';
+  mirror.style.overflowWrap = 'break-word';
+  mirror.style.top = '0';
+  mirror.style.left = '-9999px';
+
+  mirroredProperties.forEach((property) => {
+    mirror.style[property] = computed[property];
+  });
+
+  mirror.textContent = textBefore;
+  marker.textContent = '\u200b';
+  mirror.appendChild(marker);
+  document.body.appendChild(mirror);
+
+  const markerTop = marker.offsetTop;
+  const lineHeight = parseFloat(computed.lineHeight) || 24;
+  const targetScrollTop = Math.max(0, markerTop - ($editor.clientHeight / 2) + lineHeight);
+
+  document.body.removeChild(mirror);
+  $editor.scrollTop = targetScrollTop;
+}
+
+function searchDocuments(query) {
+  const loweredQuery = query.toLowerCase();
+  const sources = currentSearchScope === 'all'
+    ? getAvailableYears().map((year) => ({
+        year,
+        content: year === currentYear ? $editor.value : (documentsByYear.get(year)?.content || ''),
+      }))
+    : [{
+        year: currentYear,
+        content: $editor.value,
+      }];
+
+  const results = [];
+
+  sources.forEach(({ year, content }) => {
+    const lines = content.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.toLowerCase().includes(loweredQuery)) {
+        results.push({ year, i, line });
+      }
+    }
+  });
+
+  return results;
+}
+
+async function focusSearchResult(year, lineIndex, searchTerm) {
+  closeModal($searchModal);
+
+  if (year !== currentYear) {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+      saveTimer = null;
+    }
+    await persistContent(true);
+    loadYearDocument(year);
+  }
+
+  await waitForNextFrame();
+  await waitForNextFrame();
+  focusLine(lineIndex, searchTerm);
+}
+
+function waitForNextFrame() {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
 // Save (throttled) + snapshots
@@ -777,6 +970,15 @@ async function persistContent(isForced = false) {
         updatedAt: now,
       }),
     ]);
+
+    const currentDoc = documentsByYear.get(currentYear);
+    if (currentDoc) {
+      documentsByYear.set(currentYear, {
+        ...currentDoc,
+        content,
+        updatedAt: now,
+      });
+    }
 
     // Update local timestamp after successful save
     localUpdatedAt = now;
@@ -814,6 +1016,7 @@ async function saveSnapshot(content) {
     await db.transact([
       tx.snapshots[snapshotId].update({
         userId: currentUser.id,
+        year: currentYear,
         content,
         createdAt: now,
         pinned: false,
@@ -832,6 +1035,58 @@ function placeCursorAtEnd() {
   const len = $editor.value.length;
   $editor.selectionStart = $editor.selectionEnd = len;
   $editor.scrollTop = $editor.scrollHeight;
+}
+
+async function promptForNewYear() {
+  const suggestedYear = Math.max(new Date().getFullYear(), ...getAvailableYears(), currentYear) + 1;
+  const normalizedInput = await openNewYearModal(String(suggestedYear));
+  if (normalizedInput === null) {
+    renderYearOptions();
+    return;
+  }
+
+  const nextYear = parseInt(normalizedInput, 10);
+
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  await persistContent(true);
+
+  if (documentsByYear.has(nextYear)) {
+    loadYearDocument(nextYear);
+    return;
+  }
+
+  currentYear = nextYear;
+  storeActiveYear(nextYear);
+  currentDocId = null;
+  renderYearOptions();
+  $editor.value = '';
+  localUpdatedAt = 0;
+  updateLineCounter();
+  await createDocument(nextYear);
+}
+
+function openNewYearModal(defaultValue) {
+  return new Promise((resolve) => {
+    newYearResolver = resolve;
+    $newYearError.textContent = '';
+    $newYearInput.value = defaultValue;
+    openModal($newYearModal);
+    requestAnimationFrame(() => {
+      $newYearInput.focus();
+      $newYearInput.select();
+    });
+  });
+}
+
+function resolveNewYearModal(value) {
+  if (!newYearResolver) return;
+  const resolver = newYearResolver;
+  newYearResolver = null;
+  closeModal($newYearModal);
+  resolver(value);
 }
 
 // Export
@@ -860,6 +1115,25 @@ function downloadText(text, filename) {
   URL.revokeObjectURL(url);
 }
 
+function getYearFilename(year) {
+  return `OneList ${year}.txt`;
+}
+
+function exportAllYears() {
+  const years = getAvailableYears();
+  if (!years.length) {
+    downloadText($editor.value, getYearFilename(currentYear));
+    return;
+  }
+
+  years.forEach((year, index) => {
+    const doc = documentsByYear.get(year);
+    window.setTimeout(() => {
+      downloadText(doc?.content || '', getYearFilename(year));
+    }, index * 180);
+  });
+}
+
 // Snapshots modal
 async function showSnapshotsModal() {
   if (!currentUser) return;
@@ -875,7 +1149,9 @@ async function showSnapshotsModal() {
   });
 
   // Separate pinned and unpinned snapshots
-  const allSnapshots = data?.snapshots || [];
+  const allSnapshots = (data?.snapshots || []).filter(
+    (snapshot) => (snapshot.year || currentYear) === currentYear
+  );
   const pinnedSnapshots = allSnapshots.filter(s => s.pinned).sort(
     (a, b) => b.createdAt - a.createdAt
   );
@@ -918,6 +1194,11 @@ async function showSnapshotsModal() {
     }
   }
 
+  const $title = document.getElementById('snapshots-title');
+  if ($title) {
+    $title.textContent = `Snapshots (${currentYear})`;
+  }
+
   openModal($snapshotsModal);
 }
 
@@ -947,7 +1228,7 @@ function appendSnapshotItem(snapshot, $list, isPinned) {
   downloadBtn.setAttribute('aria-label', 'Download');
   downloadBtn.title = 'Download';
   downloadBtn.addEventListener('click', () => {
-    downloadText(snapshot.content || '', `snapshot-${snapshot.createdAt}.txt`);
+    downloadText(snapshot.content || '', `OneList snapshot ${snapshot.year || currentYear} - ${snapshot.createdAt}.txt`);
   });
 
   const pinBtn = document.createElement('button');
@@ -984,24 +1265,66 @@ function openModal(modal) {
 }
 
 function closeModal(modal) {
-  if (modal === $aiActionsModal) {
-    $aiActionsResult.innerHTML = '';
-    $aiActionSelect.value = ''; // Reset dropdown
-  }
   modal.setAttribute('aria-hidden', 'true');
 }
 
 Array.from(document.querySelectorAll('.modal .modal-close')).forEach((btn) => {
   btn.addEventListener('click', (e) => {
     const modal = e.target.closest('.modal');
-    if (modal) closeModal(modal);
+    if (!modal) return;
+    if (modal === $newYearModal && newYearResolver) {
+      resolveNewYearModal(null);
+      return;
+    }
+    closeModal(modal);
   });
 });
 
 Array.from(document.querySelectorAll('.modal')).forEach((modal) => {
   modal.addEventListener('click', (e) => {
-    if (e.target === modal) closeModal(modal);
+    if (e.target === modal) {
+      if (modal === $newYearModal && newYearResolver) {
+        resolveNewYearModal(null);
+        return;
+      }
+      closeModal(modal);
+    }
   });
+});
+
+$newYearInput.addEventListener('input', () => {
+  const digitsOnly = $newYearInput.value.replace(/\D/g, '').slice(0, 4);
+  if ($newYearInput.value !== digitsOnly) {
+    $newYearInput.value = digitsOnly;
+  }
+  if ($newYearError.textContent) {
+    $newYearError.textContent = '';
+  }
+});
+
+$newYearInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    $btnConfirmNewYear.click();
+  }
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    resolveNewYearModal(null);
+  }
+});
+
+$btnCancelNewYear.addEventListener('click', () => {
+  resolveNewYearModal(null);
+});
+
+$btnConfirmNewYear.addEventListener('click', () => {
+  const normalizedInput = $newYearInput.value.trim();
+  if (!/^\d{4}$/.test(normalizedInput)) {
+    $newYearError.textContent = 'Please enter exactly 4 numbers.';
+    $newYearInput.focus();
+    return;
+  }
+  resolveNewYearModal(normalizedInput);
 });
 
 // Events
@@ -1032,6 +1355,7 @@ $editor.addEventListener('keydown', (e) => {
     }
 
     scheduleSave();
+    updateLineCounter();
   }
 });
 
@@ -1181,7 +1505,7 @@ function loadTextFormatting() {
   }
   if (savedFamily) {
     // Only apply if it's in the allowed list
-    const allowedFamilies = ['monospace', 'serif', 'sans-serif', 'cursive', 'system-ui'];
+    const allowedFamilies = ['google-sans-flex', 'serif', 'sans-serif', 'cursive', 'system-ui'];
     if (allowedFamilies.includes(savedFamily)) {
       currentFontFamily = savedFamily;
     }
@@ -1196,14 +1520,14 @@ function applyTextFormatting() {
 
   // Apply font family with fallbacks
   const fontFamilyMap = {
-    'monospace': "'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', 'Droid Sans Mono', 'Source Code Pro', ui-monospace, monospace",
+    'google-sans-flex': "'Google Sans Flex', 'Google Sans', system-ui, sans-serif",
     'serif': "'Georgia', 'Times New Roman', serif",
-    'sans-serif': "'Arial', 'Helvetica', sans-serif",
+    'sans-serif': "'Google Sans Flex', 'Google Sans', 'Helvetica Neue', Arial, sans-serif",
     'cursive': "'Comic Sans MS', 'Apple Chancery', cursive",
     'system-ui': "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
   };
 
-  $editor.style.fontFamily = fontFamilyMap[currentFontFamily] || fontFamilyMap['monospace'];
+  $editor.style.fontFamily = fontFamilyMap[currentFontFamily] || fontFamilyMap['google-sans-flex'];
 }
 
 function updateFormatDisplay() {
@@ -1450,492 +1774,10 @@ $snippetContent.addEventListener('keydown', (e) => {
   loadTextFormatting();
 })();
 
-// ==================== AI INSIGHTS FUNCTIONALITY ====================
-
-// Delegate clicks on action buttons (desktop)
-document.addEventListener('click', (e) => {
-  const btn = e.target.closest('.action-btn');
-  if (btn && btn.dataset.action) {
-    runAiAction(btn.dataset.action);
-  }
-});
-
-// Mobile dropdown handler
-$btnRunAiAction.addEventListener('click', () => {
-  const action = $aiActionSelect.value;
-  if (!action) {
-    alert('Please select an AI action first');
-    return;
-  }
-  runAiAction(action);
-});
-
-// Helper: parse document into date sections using dd-MM-yyyy headers
-function parseDateSections() {
-  const lines = $editor.value.split('\n');
-  const dateRegex = /^(\d{2})-(\d{2})-(\d{4})$/;
-  const sections = [];
-  let current = null;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-    const m = line.match(dateRegex);
-    if (m) {
-      // close previous section
-      if (current) {
-        current.endIndex = i - 1;
-        current.text = lines.slice(current.startIndex, current.endIndex + 1).join('\n');
-        sections.push(current);
-      }
-      const dd = parseInt(m[1], 10);
-      const mm = parseInt(m[2], 10);
-      const yyyy = parseInt(m[3], 10);
-      const dt = new Date(yyyy, mm - 1, dd);
-      current = { date: dt, headerIndex: i, startIndex: i + 1, endIndex: i + 1, text: '' };
-    }
-  }
-  if (current) {
-    current.endIndex = lines.length - 1;
-    current.text = lines.slice(current.startIndex, current.endIndex + 1).join('\n');
-    sections.push(current);
-  }
-  return sections;
-}
-
-function startOfMonth(d) {
-  return new Date(d.getFullYear(), d.getMonth(), 1);
-}
-
-function addDays(d, n) {
-  const x = new Date(d);
-  x.setDate(x.getDate() + n);
-  return x;
-}
-
-function sameDay(a, b) {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-}
-
-// Collect content for a range type
-function getRangeContent(type) {
-  const secs = parseDateSections();
-  const today = new Date();
-  let selected = [];
-
-  if (type === 'weekly') {
-    const from = addDays(today, -6);
-    selected = secs.filter(s => s.date >= from && s.date <= today);
-  } else if (type === 'monthly') {
-    const from = startOfMonth(today);
-    selected = secs.filter(s => s.date >= from && s.date <= today);
-  } else if (type === 'mental') {
-    selected = secs.filter(s => sameDay(s.date, today));
-    if (!selected.length && secs.length) {
-      selected = [secs[secs.length - 1]]; // fallback to last section
-    }
-  } else if (type === 'plan') {
-    const selText = getSelectedText();
-    if (selText && selText.trim()) {
-      return selText.trim();
-    }
-    // fallback to today or last section
-    const todaySec = secs.filter(s => sameDay(s.date, today));
-    selected = todaySec.length ? todaySec : (secs.length ? [secs[secs.length - 1]] : []);
-  }
-
-  const combined = selected.map(s => s.text.trim()).filter(Boolean).join('\n\n');
-  return combined || '';
-}
-
-function getSelectedText() {
-  const start = $editor.selectionStart;
-  const end = $editor.selectionEnd;
-  if (start === end) return '';
-  return $editor.value.slice(start, end);
-}
-
-// Build a specific instruction per action
-function actionInstruction(type) {
-  if (type === 'weekly') {
-    return [
-      'Produce a concise weekly summary based strictly on the provided context.',
-      'Include: Highlights (top wins), Themes, Blockers, and 5 actionable next steps.',
-      'Be specific and avoid speculation beyond the context.'
-    ].join(' ');
-  }
-  if (type === 'monthly') {
-    return [
-      'Summarize this month-to-date: key projects, patterns, progress, risks.',
-      'End with priorities for the next week and risk mitigations.',
-      'Ground all points in the provided context.'
-    ].join(' ');
-  }
-  if (type === 'mental') {
-    return [
-      'Assess mental health for today using only the provided context.',
-      'Output sections: Mood, Stress, Energy, Sleep, Confidence.',
-      'Finish with 3 practical self-care actions (brief, doable).'
-    ].join(' ');
-  }
-  if (type === 'plan') {
-    return [
-      'Turn the provided text into a short, prioritized plan.',
-      'Include steps, dependencies, and a simple timeline.',
-      'Keep it actionable and minimal.'
-    ].join(' ');
-  }
-  return 'Provide a concise, context-grounded analysis.';
-}
-
-// Run an AI action
-async function runAiAction(type) {
-  // Check quota before running
-  const canRun = await checkAiQuota();
-  if (!canRun) {
-    return; // Error message already shown by checkAiQuota
-  }
-
-  // Clear previous result
-  $aiActionsResult.innerHTML = '';
-  // Show modal if not open
-  openModal($aiActionsModal);
-
-  // Loading UI
-  const loading = document.createElement('div');
-  loading.className = 'ai-message-content';
-  loading.textContent = 'Thinking...';
-  loading.style.fontStyle = 'italic';
-  loading.style.color = '#8b7355';
-  $aiActionsResult.appendChild(loading);
-
-  try {
-    // Load settings (model and system prompt only)
-    const { data: settingsData } = await db.queryOnce({
-      settings: { $: { where: { userId: currentUser.id } } }
-    });
-    const settings = settingsData?.settings || [];
-    const userSettings = settings[0] || {};
-    const model = userSettings.aiModel || 'gpt-4o';
-    const systemPrompt = userSettings.aiSystemPrompt || 'You are a helpful assistant that analyzes my OneList document. Respond strictly based on provided context.';
-
-    // Collect context for the action
-    const contextText = getRangeContent(type);
-    const instruction = actionInstruction(type);
-
-    // Build messages
-    const messages = [
-      { role: 'system', content: systemPrompt },
-      { role: 'system', content: `Action: ${type}. Instruction: ${instruction}` }
-    ];
-
-    if (contextText && contextText.trim()) {
-      const truncated = contextText.length > 8000 ? '...' + contextText.slice(-8000) : contextText;
-      messages.push({ role: 'system', content: `Context:\n\n${truncated}` });
-    } else {
-      messages.push({ role: 'system', content: 'Context: No date-based content found. If applicable, provide a general guidance with clear caveats.' });
-    }
-
-    messages.push({ role: 'user', content: 'Return the result in clear sections and bullet points.' });
-
-    // Call serverless proxy (reads OPENAI_API_KEY from env)
-    const resp = await fetch('/api/openai', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages, temperature: 0.5, max_tokens: 900 }),
-    });
-
-    if (!resp.ok) {
-      const errJson = await resp.json().catch(() => ({}));
-      throw new Error(errJson.error || 'Failed to get AI response');
-    }
-
-    const data = await resp.json();
-    const answer = data.answer || 'No response from AI';
-
-    // Increment usage count
-    await incrementAiUsage();
-
-    // Render
-    $aiActionsResult.innerHTML = formatAiResponse(answer);
-    
-    // Update usage display
-    updateAiUsageDisplay();
-  } catch (err) {
-    $aiActionsResult.innerHTML = `<div class="ai-message-content">Error: ${escapeHtml(err.message)}</div>`;
-  }
-}
-
-// ==================== AI CHAT FUNCTIONALITY (OLD - KEPT FOR COMPATIBILITY) ====================
-
-// Format AI response with markdown-like styling
-function formatAiResponse(text) {
-  // Escape HTML first
-  let formatted = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-
-  // Convert **bold** to <strong>
-  formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  
-  // Convert *italic* to <em>
-  formatted = formatted.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  
-  // Convert numbered lists (1. 2. 3. etc)
-  formatted = formatted.replace(/^(\d+\.\s.+)$/gm, '<div class="ai-list-item">$1</div>');
-  
-  // Convert bullet points (- or *)
-  formatted = formatted.replace(/^[-*]\s(.+)$/gm, '<div class="ai-list-item">• $1</div>');
-  
-  // Convert line breaks to <br>
-  formatted = formatted.replace(/\n/g, '<br>');
-  
-  return formatted;
-}
-
-// ==================== SETTINGS FUNCTIONALITY ====================
-
-// Show settings modal
 async function showSettingsModal() {
-  if (!currentUser) return;
-
-  try {
-    const { data } = await db.queryOnce({
-      settings: {
-        $: {
-          where: {
-            userId: currentUser.id,
-          },
-        },
-      },
-    });
-
-    const settings = data?.settings || [];
-    if (settings.length > 0) {
-      const userSettings = settings[0];
-      currentSettingsId = userSettings.id;
-
-      $settingsAiModel.value = userSettings.aiModel || 'gpt-4o';
-      $settingsAiSystemPrompt.value = userSettings.aiSystemPrompt || '';
-    } else {
-      // No settings yet - set defaults
-      currentSettingsId = null;
-      $settingsAiModel.value = 'gpt-4o';
-      $settingsAiSystemPrompt.value = 'You are a helpful assistant that analyzes my OneList document. Answer questions based on the document content. If you cannot find relevant information in the document, say so clearly.';
-    }
-  } catch (err) {
-    console.error('Error loading settings:', err);
-  }
-
   openModal($settingsModal);
 }
 
-// Save settings
-$btnSaveSettings.addEventListener('click', async () => {
-  if (!currentUser) return;
-
-  const model = $settingsAiModel.value;
-  const systemPrompt = $settingsAiSystemPrompt.value.trim();
-
-  try {
-    if (currentSettingsId) {
-      const updateData = {
-        aiModel: model,
-        aiSystemPrompt: systemPrompt,
-        updatedAt: Date.now(),
-      };
-      await db.transact([
-        tx.settings[currentSettingsId].update(updateData),
-      ]);
-    } else {
-      const settingsId = id();
-      await db.transact([
-        tx.settings[settingsId].update({
-          userId: currentUser.id,
-          aiModel: model,
-          aiSystemPrompt: systemPrompt,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        }),
-      ]);
-      currentSettingsId = settingsId;
-    }
-
-    // Show success feedback
-    const originalText = $btnSaveSettings.textContent;
-    $btnSaveSettings.textContent = 'Saved!';
-    setTimeout(() => {
-      $btnSaveSettings.textContent = originalText;
-    }, 1500);
-  } catch (err) {
-    console.error('Error saving settings:', err);
-    alert('Failed to save settings: ' + err.message);
-  }
+$btnSaveSettings.addEventListener('click', () => {
+  closeModal($settingsModal);
 });
-
-// ==================== AI USAGE QUOTA MANAGEMENT ====================
-
-// Initialize AI usage tracking for new users
-async function initializeAiUsage() {
-  if (!currentUser) return;
-  
-  const usageId = id();
-  const resetDate = getNextMonthFirstDay();
-  
-  try {
-    await db.transact([
-      tx.aiUsage[usageId].update({
-        userId: currentUser.id,
-        count: 0,
-        resetDate: resetDate.toISOString(),
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      }),
-    ]);
-    
-    currentAiUsageId = usageId;
-    aiUsageCount = 0;
-    usageResetDate = resetDate;
-  } catch (err) {
-    console.error('Error initializing AI usage:', err);
-  }
-}
-
-// Get the first day of next month
-function getNextMonthFirstDay() {
-  const now = new Date();
-  const year = now.getMonth() === 11 ? now.getFullYear() + 1 : now.getFullYear();
-  const month = now.getMonth() === 11 ? 0 : now.getMonth() + 1;
-  return new Date(year, month, 1, 0, 0, 0, 0);
-}
-
-// Check if usage needs to be reset
-async function checkAndResetUsage() {
-  if (!currentAiUsageId || !usageResetDate) return;
-  
-  const now = new Date();
-  if (now >= usageResetDate) {
-    // Reset the counter
-    const newResetDate = getNextMonthFirstDay();
-    
-    try {
-      await db.transact([
-        tx.aiUsage[currentAiUsageId].update({
-          count: 0,
-          resetDate: newResetDate.toISOString(),
-          updatedAt: Date.now(),
-        }),
-      ]);
-      
-      aiUsageCount = 0;
-      usageResetDate = newResetDate;
-      console.log('[AI Usage] Counter reset for new month');
-    } catch (err) {
-      console.error('Error resetting AI usage:', err);
-    }
-  }
-}
-
-// Check if user can run AI action
-async function checkAiQuota() {
-  // Ensure usage is initialized
-  if (!currentAiUsageId) {
-    await initializeAiUsage();
-  }
-  
-  // Check and reset if needed
-  await checkAndResetUsage();
-  
-  if (aiUsageCount >= AI_MONTHLY_LIMIT) {
-    const resetDateStr = usageResetDate ? usageResetDate.toLocaleDateString('en-GB', {
-      day: '2-digit',
-      month: 'long',
-      year: 'numeric'
-    }) : '1st of next month';
-    
-    $aiActionsResult.innerHTML = `
-      <div class="ai-message-content" style="color: #d9534f;">
-        <strong>Monthly AI limit reached (${AI_MONTHLY_LIMIT}/${AI_MONTHLY_LIMIT})</strong><br><br>
-        Your free tier allows ${AI_MONTHLY_LIMIT} AI generations per month. Your quota will reset on <strong>${resetDateStr}</strong>.
-      </div>
-    `;
-    return false;
-  }
-  
-  return true;
-}
-
-// Increment AI usage count
-async function incrementAiUsage() {
-  if (!currentAiUsageId) return;
-  
-  const newCount = aiUsageCount + 1;
-  
-  try {
-    await db.transact([
-      tx.aiUsage[currentAiUsageId].update({
-        count: newCount,
-        updatedAt: Date.now(),
-      }),
-    ]);
-    
-    aiUsageCount = newCount;
-    console.log(`[AI Usage] Count: ${aiUsageCount}/${AI_MONTHLY_LIMIT}`);
-  } catch (err) {
-    console.error('Error incrementing AI usage:', err);
-  }
-}
-
-// Update AI usage display in modal
-function updateAiUsageDisplay() {
-  const container = document.querySelector('#ai-actions-modal .modal-content');
-  if (!container) return;
-  
-  // Remove existing usage display
-  const existing = container.querySelector('.ai-usage-display');
-  if (existing) {
-    existing.remove();
-  }
-  
-  // Create new usage display
-  const usageDisplay = document.createElement('div');
-  usageDisplay.className = 'ai-usage-display';
-  
-  const remaining = Math.max(0, AI_MONTHLY_LIMIT - aiUsageCount);
-  const resetDateStr = usageResetDate ? usageResetDate.toLocaleDateString('en-GB', {
-    day: 'numeric',
-    month: 'long'
-  }) : '1st of next month';
-  
-  if (remaining > 0) {
-    usageDisplay.innerHTML = `
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="10"></circle>
-        <path d="M12 6v6l4 2"></path>
-      </svg>
-      <span>${remaining} generation${remaining !== 1 ? 's' : ''} remaining this month</span>
-    `;
-    usageDisplay.style.color = remaining <= 3 ? '#d9534f' : '#8b7355';
-  } else {
-    usageDisplay.innerHTML = `
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="10"></circle>
-        <line x1="15" y1="9" x2="9" y2="15"></line>
-        <line x1="9" y1="9" x2="15" y2="15"></line>
-      </svg>
-      <span>Limit reached • Resets ${resetDateStr}</span>
-    `;
-    usageDisplay.style.color = '#d9534f';
-  }
-  
-  // Insert after the title
-  const title = container.querySelector('h2');
-  if (title) {
-    title.insertAdjacentElement('afterend', usageDisplay);
-  }
-  
-  // Reinitialize Lucide icons for dynamic content
-  if (typeof lucide !== 'undefined') {
-    setTimeout(() => lucide.createIcons(), 0);
-  }
-}
