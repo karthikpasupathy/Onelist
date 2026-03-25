@@ -74,6 +74,7 @@ export function createSaveCoordinator({ saveContent, onStateChange }) {
   function getState() {
     return {
       editorRevision,
+      hasPendingChanges: hasPendingChanges(),
       lastRequestedContent,
       lastSavedRevision,
       pendingSave,

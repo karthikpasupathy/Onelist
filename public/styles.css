@@ -292,6 +292,11 @@ button:active {
   background: rgba(212, 91, 75, 0.12);
 }
 
+.save-indicator.conflict {
+  color: #a85a17;
+  background: rgba(223, 145, 39, 0.16);
+}
+
 .update-banner {
   position: fixed;
   right: 24px;
@@ -311,6 +316,11 @@ button:active {
 
 .update-banner[aria-hidden="false"] {
   display: flex;
+}
+
+.update-banner.conflict {
+  border-color: rgba(223, 145, 39, 0.3);
+  background: rgba(255, 247, 232, 0.98);
 }
 
 .update-banner-copy {
