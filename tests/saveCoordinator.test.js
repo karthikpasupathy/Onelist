@@ -64,6 +64,37 @@ test('forced flush waits for the latest content when a save is already running',
   assert.equal(coordinator.getState().lastSavedRevision, coordinator.getState().editorRevision);
 });
 
+test('trailing flush retries latest content after an in-flight save fails', async () => {
+  const saveCalls = [];
+  let releaseFirstSave;
+
+  const coordinator = createSaveCoordinator({
+    async saveContent({ content }) {
+      saveCalls.push(content);
+      if (saveCalls.length === 1) {
+        await new Promise((resolve) => {
+          releaseFirstSave = resolve;
+        });
+        throw new Error('transient failure');
+      }
+    },
+  });
+
+  coordinator.markDirty('alpha');
+  const backgroundFlush = coordinator.flush();
+  await nextTick();
+
+  coordinator.markDirty('beta');
+  const trailingFlush = coordinator.flush();
+  releaseFirstSave();
+
+  await assert.rejects(() => backgroundFlush, /transient failure/);
+  assert.equal(await trailingFlush, true);
+
+  assert.deepEqual(saveCalls, ['alpha', 'beta']);
+  assert.equal(coordinator.getState().lastSavedRevision, coordinator.getState().editorRevision);
+});
+
 test('skipped saves stay dirty and report the skipped status', async () => {
   const states = [];
 

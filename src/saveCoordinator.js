@@ -27,7 +27,13 @@ export function createSaveCoordinator({ saveContent, onStateChange }) {
 
   async function flush({ forced = false } = {}) {
     if (flushPromise) {
-      await flushPromise;
+      try {
+        await flushPromise;
+      } catch (err) {
+        if (!hasPendingChanges()) {
+          throw err;
+        }
+      }
       if (!hasPendingChanges()) return false;
     }
 

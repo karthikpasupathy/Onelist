@@ -133,6 +133,7 @@ let currentDocId = null;
 let currentYear = new Date().getFullYear();
 let currentSearchScope = 'current';
 let saveTimer = null;
+let saveRetryDelay = 1000;
 let lastSaveStatus = 'saved';
 let localUpdatedAt = 0;
 // Last server-confirmed content for the open doc; the common ancestor used as
@@ -153,6 +154,7 @@ const MIN_FONT_SIZE = 10;
 const MAX_FONT_SIZE = 24;
 const DEFAULT_FONT_FAMILY = 'google-sans-flex';
 const SNAPSHOT_INTERVAL = 5 * 60 * 1000; // 5 minutes
+const MAX_SAVE_RETRY_DELAY = 15 * 1000;
 
 let currentFontSize = DEFAULT_FONT_SIZE;
 let currentFontFamily = DEFAULT_FONT_FAMILY;
@@ -1583,14 +1585,35 @@ function scheduleSave() {
 
 async function persistContent(isForced = false) {
   try {
-    return await saveCoordinator.flush({ forced: isForced });
+    const didSave = await saveCoordinator.flush({ forced: isForced });
+    if (didSave) {
+      saveRetryDelay = 1000;
+    } else if (!isForced) {
+      queueAutosaveRetry();
+    }
+    return didSave;
   } catch (err) {
     handleSaveError(err);
     if (!isForced) {
-      showToast('Failed to save your document. Please try again.', { type: 'error' });
+      queueAutosaveRetry();
     }
     return false;
   }
+}
+
+function queueAutosaveRetry() {
+  if (!hasUnsavedEditorChanges()) return false;
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return false;
+
+  clearSaveTimer();
+  const retryDelay = saveRetryDelay;
+  saveRetryDelay = Math.min(saveRetryDelay * 2, MAX_SAVE_RETRY_DELAY);
+
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    persistContent().catch(handleSaveError);
+  }, retryDelay);
+  return true;
 }
 
 async function ensureCurrentDocumentIsSafe(nextActionLabel = 'continue') {
