@@ -886,6 +886,7 @@ function hydrateEditorFromDocument(doc, { allowConflict = true, allowBackupResto
         backupTime,
         serverContent: incomingContent,
         serverUpdatedAt,
+        localUpdatedAt,
       })
     ) {
       queueRemoteConflict(doc);
@@ -901,6 +902,11 @@ function hydrateEditorFromDocument(doc, { allowConflict = true, allowBackupResto
   const cursorPos = $editor.selectionStart;
 
   if ($editor.value !== incomingContent) {
+    if (hasUnsavedEditorChanges() && serverUpdatedAt <= localUpdatedAt) {
+      setEditorBootstrapping(false);
+      return;
+    }
+
     editorHistory.beforeEdit($editor);
     $editor.value = incomingContent;
     if (cursorPos <= $editor.value.length) {
@@ -927,6 +933,14 @@ function shouldQueueRemoteConflict(doc, incomingContent, serverUpdatedAt) {
 }
 
 function queueRemoteConflict(doc) {
+  if (
+    pendingRemoteConflict?.docId === doc.id &&
+    pendingRemoteConflict?.year === doc.year &&
+    pendingRemoteConflict?.updatedAt === (doc.updatedAt || 0)
+  ) {
+    return;
+  }
+
   clearSaveTimer();
   pendingRemoteConflict = {
     docId: doc.id,

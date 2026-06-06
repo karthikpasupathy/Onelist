@@ -35,7 +35,9 @@ export function shouldQueueBackupConflict({
   backupTime,
   serverContent,
   serverUpdatedAt,
+  localUpdatedAt,
 }) {
   if ((backupContent ?? '') === (serverContent ?? '')) return false;
-  return backupTime > serverUpdatedAt;
+  if ((serverUpdatedAt || 0) <= (localUpdatedAt || 0)) return false;
+  return (backupContent ?? '') !== (serverContent ?? '');
 }

@@ -71,13 +71,26 @@ test('shouldRestoreDraftBackup only restores unsaved crash recovery drafts', () 
   );
 });
 
-test('shouldQueueBackupConflict detects ambiguous backup timestamps', () => {
+test('shouldQueueBackupConflict only fires when server moved ahead of last sync', () => {
+  assert.equal(
+    shouldQueueBackupConflict({
+      backupContent: 'local draft',
+      backupTime: 1_500,
+      serverContent: 'saved',
+      serverUpdatedAt: 1_000,
+      localUpdatedAt: 1_000,
+    }),
+    false,
+    'local typing after save is not a remote conflict'
+  );
+
   assert.equal(
     shouldQueueBackupConflict({
       backupContent: 'local',
       backupTime: 300,
       serverContent: 'remote',
       serverUpdatedAt: 200,
+      localUpdatedAt: 100,
     }),
     true
   );
@@ -88,6 +101,7 @@ test('shouldQueueBackupConflict detects ambiguous backup timestamps', () => {
       backupTime: 300,
       serverContent: 'same',
       serverUpdatedAt: 200,
+      localUpdatedAt: 100,
     }),
     false
   );

@@ -170,9 +170,27 @@ test('scenario: crash recovery restores draft only for same server version', () 
       backupTime: 1_500,
       serverContent: phoneServer.content,
       serverUpdatedAt: phoneServer.updatedAt,
+      localUpdatedAt: 1_000,
     }),
-    false,
-    'when server moved forward, ambiguous backup should not auto-win'
+    true,
+    'when server moved forward with different content, surface a conflict'
+  );
+});
+
+test('scenario: typing after save is not treated as a remote conflict', () => {
+  seedLaptopSave('saved text', 1_000);
+
+  const server = getDocuments()[0];
+
+  assert.equal(
+    shouldQueueBackupConflict({
+      backupContent: 'saved text with more typing',
+      backupTime: 1_200,
+      serverContent: server.content,
+      serverUpdatedAt: server.updatedAt,
+      localUpdatedAt: server.updatedAt,
+    }),
+    false
   );
 });
 
