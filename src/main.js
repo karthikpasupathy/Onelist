@@ -31,6 +31,11 @@ import {
   upsertSnippet as upsertLocalSnippet,
 } from './localDevStore.js';
 import { readDocumentCache, writeDocumentCache } from './documentCache.js';
+import {
+  shouldBlockSaveOverRemote,
+  shouldQueueBackupConflict,
+  shouldRestoreDraftBackup,
+} from './syncGuard.js';
 
 // Read InstantDB App ID from environment variable
 // Users must set VITE_INSTANT_APP_ID in their Vercel environment variables
@@ -70,6 +75,8 @@ const $results = document.getElementById('search-results');
 const $yearSelect = document.getElementById('year-select');
 const $snapshotsModal = document.getElementById('snapshots-modal');
 const $btnSearchModal = document.getElementById('btn-search-modal');
+const $btnSyncConflict = document.getElementById('btn-sync-conflict');
+const $saveIndicator = document.getElementById('save-indicator');
 const $btnAppendDate = document.getElementById('btn-append-date');
 const $searchModal = document.getElementById('search-modal');
 const $searchInput = document.getElementById('search-input');
@@ -114,6 +121,7 @@ const $lineCounter = document.getElementById('line-counter');
 const $lineCount = document.getElementById('line-count');
 const $wordCount = document.getElementById('word-count');
 const $updateBanner = document.getElementById('update-banner');
+const $updateBannerIcon = document.getElementById('update-banner-icon');
 const $updateBannerTitle = document.getElementById('update-banner-title');
 const $updateBannerMessage = document.getElementById('update-banner-message');
 const $btnUpdateAux = document.getElementById('btn-update-aux');
@@ -203,6 +211,32 @@ const saveCoordinator = createSaveCoordinator({
     const docId = currentDocId;
     const year = currentYear;
     const now = Date.now();
+
+    if (!isResolvingRemoteConflict) {
+      const serverDoc = await fetchServerDocument(docId);
+      if (
+        serverDoc &&
+        shouldBlockSaveOverRemote({
+          localUpdatedAt,
+          localContent: content,
+          serverUpdatedAt: serverDoc.updatedAt || 0,
+          serverContent: serverDoc.content || '',
+        })
+      ) {
+        documentsByYear.set(year, serverDoc);
+
+        if (hasUnsavedEditorChanges()) {
+          queueRemoteConflict(serverDoc);
+          return { skipped: true, status: 'conflict' };
+        }
+
+        hydrateEditorFromDocument(serverDoc, {
+          allowConflict: false,
+          allowBackupRestore: false,
+        });
+        return { skipped: true, status: 'synced' };
+      }
+    }
 
     if (isDevBypass) {
       updateLocalDocumentContent(docId, content, now);
@@ -332,8 +366,43 @@ function syncDocumentCache(content = $editor.value) {
   writeDocumentCache(currentUser.id, currentYear, {
     docId: currentDocId,
     content,
-    updatedAt: Math.max(localUpdatedAt, Date.now()),
+    updatedAt: localUpdatedAt,
   });
+}
+
+async function fetchServerDocument(docId) {
+  if (!docId || !currentUser) return null;
+
+  if (isDevBypass) {
+    return getLocalDocuments().find((doc) => doc.id === docId && doc.userId === currentUser.id) || null;
+  }
+
+  if (!db) return null;
+
+  const result = await db.queryOnce(getDocumentsQuery());
+  const docs = result.data?.documents || [];
+  return docs.find((doc) => doc.id === docId) || null;
+}
+
+async function refreshRemoteDocumentIfNeeded() {
+  if (!currentDocId || !currentUser) return;
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+
+  try {
+    if (isDevBypass) {
+      const docs = getLocalDocuments().filter((doc) => doc.userId === currentUser.id);
+      await applyDocumentsSnapshot(docs);
+    } else {
+      const result = await db.queryOnce(getDocumentsQuery());
+      const docs = result.data?.documents || [];
+      const didApply = await applyDocumentsSnapshot(docs);
+      if (!didApply) return;
+    }
+
+    await hydrateCurrentYearFromMemory();
+  } catch (err) {
+    console.warn('[Sync] Failed to refresh document from server:', err);
+  }
 }
 
 // Send magic code
@@ -789,20 +858,37 @@ function hydrateEditorFromDocument(doc, { allowConflict = true, allowBackupResto
 
   if (allowBackupRestore && backupContent && backupTimeStr) {
     const backupTime = parseInt(backupTimeStr, 10);
-    if (backupTime > serverUpdatedAt && !pendingRemoteConflict) {
-      console.log('[Recovery] Found newer backup! Restoring lost content...');
+
+    if (
+      shouldRestoreDraftBackup({
+        backupContent,
+        backupTime,
+        serverContent: incomingContent,
+        serverUpdatedAt,
+        localUpdatedAt,
+      })
+    ) {
+      console.log('[Recovery] Restoring unsaved draft from local backup');
       editorHistory.beforeEdit($editor);
       $editor.value = backupContent;
-      localUpdatedAt = backupTime;
       saveCoordinator.markDirty(backupContent);
-      persistContent(true).then(() => {
-        console.log('[Recovery] Successfully restored and saved backup to server');
-        localStorage.removeItem(`onelist_backup_${doc.id}`);
-        localStorage.removeItem(`onelist_backup_time_${doc.id}`);
-      }).catch(handleSaveError);
       updateLineCounter();
       editorHistory.clear();
       syncDocumentCache(backupContent);
+      scheduleSave();
+      setEditorBootstrapping(false);
+      return;
+    }
+
+    if (
+      shouldQueueBackupConflict({
+        backupContent,
+        backupTime,
+        serverContent: incomingContent,
+        serverUpdatedAt,
+      })
+    ) {
+      queueRemoteConflict(doc);
       setEditorBootstrapping(false);
       return;
     }
@@ -1163,6 +1249,14 @@ $btnHelpMenu.addEventListener('click', () => {
 
 // Search modal
 $btnSearchModal.addEventListener('click', openSearchModal);
+
+$saveIndicator?.addEventListener('click', () => {
+  if (lastSaveStatus === 'conflict') {
+    openRemoteConflictDialog();
+  }
+});
+
+$btnSyncConflict?.addEventListener('click', openRemoteConflictDialog);
 
 $btnAppendDate.addEventListener('mousedown', (e) => {
   e.preventDefault();
@@ -2093,10 +2187,12 @@ $editor.addEventListener('scroll', () => {
 // Save immediately when user switches tabs or minimizes app (CRITICAL for PWA!)
 document.addEventListener('visibilitychange', async () => {
   if (document.hidden) {
-    // User switched away - save immediately and wait for completion!
     clearSaveTimer();
     await persistContent(true);
+    return;
   }
+
+  await refreshRemoteDocumentIfNeeded();
 });
 
 // Save immediately when user closes tab/window
@@ -2145,17 +2241,22 @@ window.addEventListener('pagehide', (e) => {
 window.addEventListener('online', () => {
   refreshSaveIndicator();
   console.log('[OneList] Back online - syncing...');
-  // Try to save any pending changes
-  if (currentDocId && currentUser) {
-    persistContent(true);
-  }
-  if (pendingRemoteConflict?.docId === currentDocId) {
-    showRemoteConflictBanner();
-    return;
-  }
-  if (hasPendingAppUpdate && $updateBanner?.getAttribute('aria-hidden') !== 'false') {
-    showUpdateBanner('Update is ready. Refresh when you are ready.');
-  }
+  refreshRemoteDocumentIfNeeded()
+    .then(() => {
+      if (pendingRemoteConflict?.docId === currentDocId) {
+        showRemoteConflictBanner();
+        return;
+      }
+      if (currentDocId && currentUser && hasUnsavedEditorChanges()) {
+        persistContent(true).catch(handleSaveError);
+      }
+      if (hasPendingAppUpdate && $updateBanner?.getAttribute('aria-hidden') !== 'false') {
+        showUpdateBanner('Update is ready. Refresh when you are ready.');
+      }
+    })
+    .catch((err) => {
+      console.warn('[Sync] Failed to refresh after reconnect:', err);
+    });
 });
 
 window.addEventListener('offline', () => {
@@ -2163,43 +2264,73 @@ window.addEventListener('offline', () => {
   console.log('[OneList] Offline - edits stay on this device until you reconnect');
 });
 
+window.addEventListener('resize', () => {
+  if (pendingRemoteConflict?.docId === currentDocId) {
+    setSyncConflictToolbarVisible(true);
+  }
+});
+
 // Update save indicator in UI
+function isMobileSyncConflictLayout() {
+  return typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches;
+}
+
+function setSyncConflictToolbarVisible(visible) {
+  if (!$btnSyncConflict) return;
+  const showToolbar = visible && isMobileSyncConflictLayout();
+  $btnSyncConflict.hidden = !showToolbar;
+  if (showToolbar && typeof lucide !== 'undefined') {
+    setTimeout(() => lucide.createIcons(), 0);
+  }
+}
+
+function openRemoteConflictDialog() {
+  if (!pendingRemoteConflict || pendingRemoteConflict.docId !== currentDocId) return;
+  showRemoteConflictBanner();
+}
+
 function updateSaveIndicator(status) {
   lastSaveStatus = status;
-  const indicator = document.getElementById('save-indicator');
+  const indicator = $saveIndicator;
   if (!indicator) return;
+
+  setSyncConflictToolbarVisible(false);
+  indicator.disabled = true;
+  indicator.removeAttribute('aria-label');
 
   switch (status) {
     case 'saving':
       indicator.textContent = 'Saving...';
       indicator.className = 'save-indicator saving';
-      indicator.style.display = 'inline-block';
+      indicator.hidden = false;
       break;
     case 'saved':
       indicator.textContent = 'Saved';
       indicator.className = 'save-indicator saved';
-      indicator.style.display = 'inline-block';
-      // Hide after 2 seconds
+      indicator.hidden = false;
       setTimeout(() => {
         if (lastSaveStatus === 'saved') {
-          indicator.style.display = 'none';
+          indicator.hidden = true;
         }
       }, 2000);
       break;
     case 'offline':
       indicator.textContent = hasUnsavedEditorChanges() ? 'Unsynced offline' : 'Offline';
       indicator.className = 'save-indicator offline';
-      indicator.style.display = 'inline-block';
+      indicator.hidden = false;
       break;
     case 'error':
       indicator.textContent = 'Save failed';
       indicator.className = 'save-indicator error';
-      indicator.style.display = 'inline-block';
+      indicator.hidden = false;
       break;
     case 'conflict':
       indicator.textContent = 'Remote update';
       indicator.className = 'save-indicator conflict';
-      indicator.style.display = 'inline-block';
+      indicator.hidden = false;
+      indicator.disabled = false;
+      indicator.setAttribute('aria-label', 'Remote update — click to resolve');
+      setSyncConflictToolbarVisible(true);
       break;
   }
 }
@@ -2707,11 +2838,14 @@ function hideUpdateBanner({ preserveConflict = true } = {}) {
 function showRemoteConflictBanner() {
   if (!pendingRemoteConflict || pendingRemoteConflict.docId !== currentDocId) return;
 
-  const conflictDate = new Date(pendingRemoteConflict.updatedAt || Date.now()).toLocaleString();
+  const conflictDate = new Date(pendingRemoteConflict.updatedAt || Date.now()).toLocaleString(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
   showBanner({
     mode: 'remote-conflict',
     title: 'Newer version found',
-    message: `Another device saved newer changes on ${conflictDate}. Keep your text or load the newer version.`,
+    message: `Another device saved changes on ${conflictDate}. Choose which version to keep.`,
     auxLabel: 'Keep mine',
     dismissLabel: 'Compare later',
     refreshLabel: 'Load theirs',
@@ -2724,6 +2858,18 @@ function showBanner({ mode, title, message, auxLabel = '', dismissLabel, refresh
 
   activeBannerMode = mode;
   $updateBanner.classList.toggle('conflict', conflict);
+  if ($updateBanner) {
+    if (conflict) {
+      $updateBanner.setAttribute('role', 'alertdialog');
+      $updateBanner.setAttribute('aria-modal', 'false');
+    } else {
+      $updateBanner.removeAttribute('role');
+      $updateBanner.removeAttribute('aria-modal');
+    }
+  }
+  if ($updateBannerIcon) {
+    $updateBannerIcon.hidden = !conflict;
+  }
   if ($updateBannerTitle) {
     $updateBannerTitle.textContent = title;
   }
@@ -2752,6 +2898,10 @@ function showBanner({ mode, title, message, auxLabel = '', dismissLabel, refresh
   }
 
   $updateBanner.setAttribute('aria-hidden', 'false');
+
+  if (typeof lucide !== 'undefined') {
+    setTimeout(() => lucide.createIcons(), 0);
+  }
 }
 
 async function keepLocalVersion() {
