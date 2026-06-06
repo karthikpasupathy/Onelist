@@ -68,7 +68,10 @@
           <label class="year-select-wrap" for="year-select">
             <select id="year-select" class="year-select" aria-label="Select year"></select>
           </label>
-          <button id="btn-search-modal" class="icon-btn" title="Search">
+          <button id="btn-append-date" class="icon-btn" type="button" title="Add date (Ctrl+Shift+D)" aria-label="Add date">
+            <i data-lucide="calendar-plus" width="20" height="20"></i>
+          </button>
+          <button id="btn-search-modal" class="icon-btn" type="button" title="Search (Ctrl+K)" aria-label="Search">
             <i data-lucide="search" width="20" height="20"></i>
           </button>
           <div class="profile-menu">
@@ -79,9 +82,10 @@
               <div id="user-email" class="user-email"></div>
               <button id="btn-text-format-menu">Font Size</button>
               <button id="btn-export-year-menu">Export This Year</button>
-              <button id="btn-export-all-menu">Export All Years</button>
+              <button id="btn-export-all-menu">Export All Years (one file)</button>
               <button id="btn-snapshots-menu">Snapshots</button>
               <button id="btn-snippets-menu">Snippets</button>
+              <button id="btn-help-menu">Help &amp; Shortcuts</button>
               <button id="btn-settings-menu">Settings</button>
               <button id="btn-logout">Sign Out</button>
             </div>
@@ -91,7 +95,13 @@
 
       <main class="container">
         <div class="content">
-          <textarea id="editor" spellcheck="false" placeholder="Type here… Use /today or /tomorrow to insert date (dd-MM-yyyy)."></textarea>
+          <div class="editor-wrap">
+            <textarea id="editor" spellcheck="false" placeholder="Type here… Use /today or /tomorrow to insert date (dd-MM-yyyy)."></textarea>
+            <div id="editor-loading" class="editor-loading" aria-hidden="true" hidden>
+              <span class="editor-loading-text">Loading your notes…</span>
+            </div>
+            <div id="slash-menu" class="slash-menu" role="listbox" aria-label="Slash commands" aria-hidden="true" hidden></div>
+          </div>
 
           <section id="search-results" class="search-results" aria-live="polite"></section>
         </div>
@@ -229,6 +239,53 @@
         </div>
       </div>
 
+      <!-- Help Modal -->
+      <div id="help-modal" class="modal" aria-hidden="true">
+        <div class="modal-content help-modal-content" role="dialog" aria-modal="true" aria-labelledby="help-title">
+          <button class="modal-close" aria-label="Close">×</button>
+          <h2 id="help-title">Help &amp; Shortcuts</h2>
+          <div class="help-sections">
+            <section class="help-section">
+              <h3>Editing</h3>
+              <ul class="help-list">
+                <li><kbd>Enter</kbd> New bullet line (<code>- </code>)</li>
+                <li><kbd>Shift</kbd> + <kbd>Enter</kbd> Plain newline</li>
+                <li><kbd>/today</kbd> Insert today&apos;s date (<code>dd-MM-yyyy</code>)</li>
+                <li><kbd>/tomorrow</kbd> Insert tomorrow&apos;s date</li>
+                <li><kbd>/time</kbd> Insert current time</li>
+                <li><kbd>/line</kbd> Insert a divider line</li>
+                <li><kbd>/name</kbd> Expand a saved snippet — type <kbd>/</kbd> for suggestions</li>
+              </ul>
+            </section>
+            <section class="help-section">
+              <h3>Undo</h3>
+              <ul class="help-list">
+                <li><kbd>Ctrl</kbd> + <kbd>Z</kbd> Undo last change</li>
+              </ul>
+            </section>
+            <section class="help-section">
+              <h3>Keyboard shortcuts</h3>
+              <ul class="help-list">
+                <li><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>D</kbd> Append today&apos;s date at end</li>
+                <li><kbd>Ctrl</kbd> + <kbd>K</kbd> Open search</li>
+                <li><kbd>Ctrl</kbd> + <kbd>F</kbd> Open search</li>
+                <li><kbd>Ctrl</kbd> + <kbd>/</kbd> Open this help</li>
+                <li><kbd>Esc</kbd> Close open modal</li>
+              </ul>
+              <p class="help-note">On Mac, use <kbd>Cmd</kbd> instead of <kbd>Ctrl</kbd>.</p>
+            </section>
+            <section class="help-section">
+              <h3>Search</h3>
+              <ul class="help-list">
+                <li>Type any text to find matching lines</li>
+                <li>Type <kbd>#tag</kbd> to filter lines by hashtag (e.g. <code>#work</code>)</li>
+                <li>Switch scope to search all years or just the current year</li>
+              </ul>
+            </section>
+          </div>
+        </div>
+      </div>
+
       <!-- New Year Modal -->
       <div id="new-year-modal" class="modal" aria-hidden="true">
         <div class="modal-content new-year-modal-content" role="dialog" aria-modal="true" aria-labelledby="new-year-title">
@@ -244,6 +301,16 @@
             <button id="btn-cancel-new-year" class="btn-secondary">Cancel</button>
             <button id="btn-confirm-new-year" class="btn-primary">Create</button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="confirm-dialog" class="confirm-dialog" aria-hidden="true" role="alertdialog" aria-modal="true" aria-labelledby="confirm-message">
+      <div class="confirm-dialog-panel">
+        <p id="confirm-message"></p>
+        <div class="confirm-dialog-actions">
+          <button id="btn-confirm-cancel" class="btn-secondary" type="button">Cancel</button>
+          <button id="btn-confirm-ok" class="btn-primary" type="button">Confirm</button>
         </div>
       </div>
     </div>

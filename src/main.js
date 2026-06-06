@@ -3,20 +3,53 @@ import { init, tx, id } from '@instantdb/core';
 import { registerSW } from 'virtual:pwa-register';
 import { createSaveCoordinator } from './saveCoordinator.js';
 import { expandSnippetCommand } from './snippetExpansion.js';
+import { lineMatchesQuery, parseSearchQuery } from './searchUtils.js';
+import { initConfirmDialog, showConfirm, showToast } from './toast.js';
+import { createEditorHistory } from './editorHistory.js';
+import { isHistoryInput, isUndoShortcut } from './editorShortcuts.js';
+import {
+  getCaretCoordinates,
+  getSlashMenuItems,
+  parseSlashContext,
+} from './slashMenu.js';
+import {
+  buildAllYearsExport,
+  getAllYearsExportFilename,
+} from './exportUtils.js';
+import {
+  DEV_BYPASS_AUTH,
+  DEV_USER,
+  addSnapshot as addLocalSnapshot,
+  createLocalId,
+  deleteSnippet as deleteLocalSnippet,
+  getDocuments as getLocalDocuments,
+  getSnippets as getLocalSnippets,
+  getSnapshots as getLocalSnapshots,
+  updateDocumentContent as updateLocalDocumentContent,
+  updateSnapshot as updateLocalSnapshot,
+  upsertDocument as upsertLocalDocument,
+  upsertSnippet as upsertLocalSnippet,
+} from './localDevStore.js';
+import { readDocumentCache, writeDocumentCache } from './documentCache.js';
 
 // Read InstantDB App ID from environment variable
 // Users must set VITE_INSTANT_APP_ID in their Vercel environment variables
 const APP_ID = import.meta.env.VITE_INSTANT_APP_ID;
+const isDevBypass = DEV_BYPASS_AUTH;
 const APP_VERSION = __APP_VERSION__;
 const APP_BUILD = __APP_BUILD__;
 const APP_RELEASE = APP_BUILD === 'local' ? `v${APP_VERSION}` : `v${APP_VERSION} (${APP_BUILD})`;
 
-if (!APP_ID) {
+if (!APP_ID && !isDevBypass) {
   throw new Error('Missing VITE_INSTANT_APP_ID environment variable. Please configure it in Vercel project settings.');
 }
 
-// Initialize InstantDB
-const db = init({ appId: APP_ID });
+// Initialize InstantDB (skipped in local dev bypass mode)
+const db = APP_ID ? init({ appId: APP_ID }) : null;
+
+function createEntityId() {
+  return isDevBypass ? createLocalId() : id();
+}
 
 // Elements
 const $authScreen = document.getElementById('auth-screen');
@@ -30,10 +63,14 @@ const $btnVerifyCode = document.getElementById('btn-verify-code');
 const $btnBack = document.getElementById('btn-back');
 const $btnLogout = document.getElementById('btn-logout');
 const $editor = document.getElementById('editor');
+const $editorWrap = document.querySelector('.editor-wrap');
+const $editorLoading = document.getElementById('editor-loading');
+const $slashMenu = document.getElementById('slash-menu');
 const $results = document.getElementById('search-results');
 const $yearSelect = document.getElementById('year-select');
 const $snapshotsModal = document.getElementById('snapshots-modal');
 const $btnSearchModal = document.getElementById('btn-search-modal');
+const $btnAppendDate = document.getElementById('btn-append-date');
 const $searchModal = document.getElementById('search-modal');
 const $searchInput = document.getElementById('search-input');
 const $searchResultsModal = document.getElementById('search-results-modal');
@@ -64,7 +101,9 @@ const $snippetContent = document.getElementById('snippet-content');
 const $btnSaveSnippet = document.getElementById('btn-save-snippet');
 const $btnCancelSnippet = document.getElementById('btn-cancel-snippet');
 const $btnSettingsMenu = document.getElementById('btn-settings-menu');
+const $btnHelpMenu = document.getElementById('btn-help-menu');
 const $settingsModal = document.getElementById('settings-modal');
+const $helpModal = document.getElementById('help-modal');
 const $btnSaveSettings = document.getElementById('btn-save-settings');
 const $newYearModal = document.getElementById('new-year-modal');
 const $newYearInput = document.getElementById('new-year-input');
@@ -116,6 +155,17 @@ let isResolvingRemoteConflict = false;
 let hasCompletedInitialDocumentBootstrap = false;
 let initialDocumentBootstrapPromise = null;
 
+const FOCUSABLE_SELECTOR = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+let modalReturnFocus = null;
+let activeModal = null;
+
+initConfirmDialog();
+
+const editorHistory = createEditorHistory();
+let slashMenuItems = [];
+let slashMenuSelectedIndex = 0;
+let slashMenuContext = null;
+
 const updateServiceWorker = registerSW({
   immediate: true,
   onNeedRefresh() {
@@ -154,12 +204,16 @@ const saveCoordinator = createSaveCoordinator({
     const year = currentYear;
     const now = Date.now();
 
-    await db.transact([
-      tx.documents[docId].update({
-        content,
-        updatedAt: now,
-      }),
-    ]);
+    if (isDevBypass) {
+      updateLocalDocumentContent(docId, content, now);
+    } else {
+      await db.transact([
+        tx.documents[docId].update({
+          content,
+          updatedAt: now,
+        }),
+      ]);
+    }
 
     const currentDoc = documentsByYear.get(year);
     if (currentDoc?.id === docId) {
@@ -171,6 +225,7 @@ const saveCoordinator = createSaveCoordinator({
     }
 
     localUpdatedAt = now;
+    syncDocumentCache(content);
     clearResolvedRemoteConflict({ docId, year, resolvedAt: now, content });
     clearBackupForDocument(docId);
     console.log(`[Sync] Saved to server (${new Date(now).toISOString()})`);
@@ -180,33 +235,61 @@ const saveCoordinator = createSaveCoordinator({
 });
 
 // Auth state listener
-db.subscribeAuth((auth) => {
-  if (auth.user) {
-    currentUser = auth.user;
-    currentYear = getStoredYear();
-    // Update user email display
-    if ($userEmail && auth.user.email) {
-      $userEmail.textContent = auth.user.email;
+if (isDevBypass) {
+  startDevSession();
+} else {
+  db.subscribeAuth((auth) => {
+    if (auth.user) {
+      activateUserSession(auth.user);
+    } else {
+      deactivateUserSession();
     }
-    showApp();
-    subscribeToDocument();
-  } else {
-    currentUser = null;
-    currentDocId = null;
-    documentsByYear.clear();
-    clearSnippetCache();
-    clearSaveTimer();
-    saveCoordinator.reset('');
-    clearPendingRemoteConflict();
-    hideUpdateBanner({ preserveConflict: false });
-    currentYear = getStoredYear();
-    hasMigratedLegacyDoc = false;
-    hasCompletedInitialDocumentBootstrap = false;
-    initialDocumentBootstrapPromise = null;
-    localUpdatedAt = 0;
-    showAuth();
+  });
+}
+
+function activateUserSession(user) {
+  currentUser = user;
+  currentYear = getStoredYear();
+  if ($userEmail && user.email) {
+    $userEmail.textContent = user.email;
   }
-});
+  showApp();
+  const hadCachedDocument = applyCachedDocumentForStartup(user.id);
+  if (!hadCachedDocument) {
+    setEditorBootstrapping(true);
+  }
+  subscribeToDocument();
+}
+
+function deactivateUserSession() {
+  currentUser = null;
+  currentDocId = null;
+  documentsByYear.clear();
+  clearSnippetCache();
+  clearSaveTimer();
+  saveCoordinator.reset('');
+  clearPendingRemoteConflict();
+  hideUpdateBanner({ preserveConflict: false });
+  currentYear = getStoredYear();
+  hasMigratedLegacyDoc = false;
+  hasCompletedInitialDocumentBootstrap = false;
+  initialDocumentBootstrapPromise = null;
+  localUpdatedAt = 0;
+  setEditorBootstrapping(false);
+  if ($editor) {
+    $editor.value = '';
+  }
+  showAuth();
+}
+
+function startDevSession() {
+  activateUserSession(DEV_USER);
+  if ($userEmail) {
+    $userEmail.textContent = `${DEV_USER.email} (local dev)`;
+  }
+  showToast('Local dev mode — data stays in this browser only.', { duration: 6000 });
+  console.info('[OneList] Auth bypass enabled for local development.');
+}
 
 function showAuth() {
   $authScreen.style.display = 'flex';
@@ -222,18 +305,49 @@ function showApp() {
   }
 }
 
+function setEditorBootstrapping(isBootstrapping) {
+  if (!$editorLoading) return;
+  $editorLoading.hidden = !isBootstrapping;
+  $editorLoading.setAttribute('aria-hidden', isBootstrapping ? 'false' : 'true');
+  $editorWrap?.classList.toggle('is-bootstrapping', isBootstrapping);
+}
+
+function applyCachedDocumentForStartup(userId) {
+  const cached = readDocumentCache(userId, currentYear);
+  if (!cached) return false;
+
+  currentDocId = cached.docId;
+  localUpdatedAt = cached.updatedAt;
+  $editor.value = cached.content;
+  saveCoordinator.reset(cached.content);
+  updateLineCounter();
+  editorHistory.clear();
+  console.log(`[Cache] Restored year ${currentYear} from local cache`);
+  return true;
+}
+
+function syncDocumentCache(content = $editor.value) {
+  if (!currentUser || !currentDocId || !Number.isInteger(currentYear)) return;
+
+  writeDocumentCache(currentUser.id, currentYear, {
+    docId: currentDocId,
+    content,
+    updatedAt: Math.max(localUpdatedAt, Date.now()),
+  });
+}
+
 // Send magic code
 $btnSendCode.addEventListener('click', async () => {
   const email = $emailInput.value.trim();
   if (!email) {
-    alert('Please enter your email');
+    showToast('Please enter your email', { type: 'error' });
     return;
   }
 
   // Validate email format
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailRegex.test(email)) {
-    alert('Please enter a valid email address');
+    showToast('Please enter a valid email address', { type: 'error' });
     return;
   }
 
@@ -245,7 +359,7 @@ $btnSendCode.addEventListener('click', async () => {
     $codeForm.style.display = 'flex';
     $codeInput.focus();
   } catch (err) {
-    alert('Error sending code: ' + err.message);
+    showToast('Error sending code: ' + err.message, { type: 'error' });
     $btnSendCode.disabled = false;
     $btnSendCode.textContent = 'Send Code';
   }
@@ -257,7 +371,7 @@ $btnVerifyCode.addEventListener('click', async () => {
   const code = $codeInput.value.trim();
 
   if (!code) {
-    alert('Please enter the verification code');
+    showToast('Please enter the verification code', { type: 'error' });
     return;
   }
 
@@ -266,7 +380,7 @@ $btnVerifyCode.addEventListener('click', async () => {
     $btnVerifyCode.textContent = 'Signing in...';
     await db.auth.signInWithMagicCode({ email, code });
   } catch (err) {
-    alert('Invalid code. Please try again.');
+    showToast('Invalid code. Please try again.', { type: 'error' });
     $btnVerifyCode.disabled = false;
     $btnVerifyCode.textContent = 'Sign In';
     $codeInput.value = '';
@@ -296,12 +410,22 @@ $codeInput.addEventListener('keypress', (e) => {
 
 // Sign out
 $btnLogout.addEventListener('click', () => {
+  if (isDevBypass) {
+    window.location.reload();
+    return;
+  }
+
   db.auth.signOut();
 });
 
 // Subscribe to user's documents
 function subscribeToDocument() {
   if (!currentUser) return;
+
+  if (isDevBypass) {
+    subscribeToDocumentLocal();
+    return;
+  }
 
   currentYear = getStoredYear();
   renderYearOptions();
@@ -320,11 +444,17 @@ function subscribeToDocument() {
         return;
       }
 
-      if (!hasCompletedInitialDocumentBootstrap && typeof navigator !== 'undefined' && navigator.onLine) {
-        if (!initialDocumentBootstrapPromise) {
-          initialDocumentBootstrapPromise = hydrateFreshDocumentsFromServer();
+      if (!hasCompletedInitialDocumentBootstrap) {
+        await hydrateCurrentYearFromMemory();
+        setEditorBootstrapping(false);
+
+        if (typeof navigator !== 'undefined' && navigator.onLine) {
+          if (!initialDocumentBootstrapPromise) {
+            initialDocumentBootstrapPromise = hydrateFreshDocumentsFromServer();
+          }
+        } else {
+          hasCompletedInitialDocumentBootstrap = true;
         }
-        await initialDocumentBootstrapPromise;
         return;
       }
 
@@ -447,6 +577,18 @@ function subscribeToDocument() {
   };
 }
 
+async function subscribeToDocumentLocal() {
+  currentYear = getStoredYear();
+  renderYearOptions();
+
+  const docs = getLocalDocuments().filter((doc) => doc.userId === currentUser.id);
+  await applyDocumentsSnapshot(docs);
+  hasCompletedInitialDocumentBootstrap = true;
+  await hydrateCurrentYearFromMemory();
+  setEditorBootstrapping(false);
+  setSnippetCache(getLocalSnippets(currentUser.id));
+}
+
 function getDocumentsQuery() {
   return {
     documents: {
@@ -513,7 +655,7 @@ async function hydrateCurrentYearFromMemory() {
 
 async function createDocument(year = currentYear) {
   if (!currentUser || pendingDocumentYears.has(year)) return;
-  const docId = id();
+  const docId = createEntityId();
   pendingDocumentYears.add(year);
   const createdAt = Date.now();
   const nextDoc = {
@@ -526,11 +668,15 @@ async function createDocument(year = currentYear) {
   };
 
   try {
-    await db.transact([
-      tx.documents[docId].update({
-        ...nextDoc,
-      }),
-    ]);
+    if (isDevBypass) {
+      upsertLocalDocument(nextDoc);
+    } else {
+      await db.transact([
+        tx.documents[docId].update({
+          ...nextDoc,
+        }),
+      ]);
+    }
 
     documentsByYear.set(year, nextDoc);
     if (year === currentYear) {
@@ -545,14 +691,14 @@ async function createDocument(year = currentYear) {
     renderYearOptions();
   } catch (err) {
     console.error('Error creating document:', err);
-    alert('Failed to create document. Please try refreshing.');
+    showToast('Failed to create document. Please try refreshing.', { type: 'error' });
   } finally {
     pendingDocumentYears.delete(year);
   }
 }
 
 async function migrateLegacyDocuments(legacyDocs, allDocs) {
-  if (!currentUser || !legacyDocs.length) return;
+  if (!currentUser || !legacyDocs.length || isDevBypass) return;
 
   const existingYears = new Set(allDocs.filter((doc) => Number.isInteger(doc.year)).map((doc) => doc.year));
   let targetYear = getStoredYear();
@@ -637,6 +783,7 @@ function hydrateEditorFromDocument(doc, { allowConflict = true, allowBackupResto
 
   if (allowConflict && shouldQueueRemoteConflict(doc, incomingContent, serverUpdatedAt)) {
     queueRemoteConflict(doc);
+    setEditorBootstrapping(false);
     return;
   }
 
@@ -644,6 +791,7 @@ function hydrateEditorFromDocument(doc, { allowConflict = true, allowBackupResto
     const backupTime = parseInt(backupTimeStr, 10);
     if (backupTime > serverUpdatedAt && !pendingRemoteConflict) {
       console.log('[Recovery] Found newer backup! Restoring lost content...');
+      editorHistory.beforeEdit($editor);
       $editor.value = backupContent;
       localUpdatedAt = backupTime;
       saveCoordinator.markDirty(backupContent);
@@ -653,6 +801,9 @@ function hydrateEditorFromDocument(doc, { allowConflict = true, allowBackupResto
         localStorage.removeItem(`onelist_backup_time_${doc.id}`);
       }).catch(handleSaveError);
       updateLineCounter();
+      editorHistory.clear();
+      syncDocumentCache(backupContent);
+      setEditorBootstrapping(false);
       return;
     }
 
@@ -664,6 +815,7 @@ function hydrateEditorFromDocument(doc, { allowConflict = true, allowBackupResto
   const cursorPos = $editor.selectionStart;
 
   if ($editor.value !== incomingContent) {
+    editorHistory.beforeEdit($editor);
     $editor.value = incomingContent;
     if (cursorPos <= $editor.value.length) {
       $editor.selectionStart = $editor.selectionEnd = cursorPos;
@@ -674,6 +826,9 @@ function hydrateEditorFromDocument(doc, { allowConflict = true, allowBackupResto
   lastSnapshotTime = 0;
   syncSaveTracking();
   updateLineCounter();
+  editorHistory.clear();
+  syncDocumentCache(incomingContent);
+  setEditorBootstrapping(false);
   console.log(`[Sync] Loaded year ${doc.year} (${new Date(serverUpdatedAt || Date.now()).toISOString()})`);
 }
 
@@ -724,6 +879,7 @@ function writeDraftBackup(content) {
   try {
     localStorage.setItem(`onelist_backup_${currentDocId}`, content);
     localStorage.setItem(`onelist_backup_time_${currentDocId}`, Date.now().toString());
+    syncDocumentCache(content);
   } catch (err) {
     console.error('[Backup] Failed to persist draft backup:', err);
   }
@@ -735,6 +891,161 @@ function formatDate(d) {
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const yyyy = d.getFullYear();
   return `${dd}-${mm}-${yyyy}`;
+}
+
+function appendTodayDateHeader() {
+  if (!$editor) return;
+
+  const dateStr = formatDate(new Date());
+  const addition = $editor.value.trim() === ''
+    ? `${dateStr}\n- `
+    : `\n\n${dateStr}\n- `;
+
+  editorHistory.beforeEdit($editor);
+  $editor.value += addition;
+  placeCursorAtEnd();
+  scheduleSave();
+  updateLineCounter();
+}
+
+function isSlashMenuOpen() {
+  return Boolean($slashMenu && !$slashMenu.hidden);
+}
+
+function hideSlashMenu() {
+  if (!$slashMenu) return;
+  $slashMenu.hidden = true;
+  $slashMenu.setAttribute('aria-hidden', 'true');
+  $slashMenu.innerHTML = '';
+  slashMenuItems = [];
+  slashMenuSelectedIndex = 0;
+  slashMenuContext = null;
+}
+
+function positionSlashMenu() {
+  if (!$slashMenu || !$editor || !slashMenuContext) return;
+
+  const coords = getCaretCoordinates($editor, slashMenuContext.end);
+  const wrapRect = $editorWrap?.getBoundingClientRect() || $editor.getBoundingClientRect();
+  const menuHeight = $slashMenu.offsetHeight || 220;
+  const lineHeight = coords.lineHeight || 24;
+  let top = coords.top - wrapRect.top + lineHeight + 6;
+  const maxTop = $editor.clientHeight - menuHeight - 8;
+
+  if (top > maxTop) {
+    top = Math.max(8, coords.top - wrapRect.top - menuHeight - 6);
+  }
+
+  const left = Math.max(
+    8,
+    Math.min(coords.left - wrapRect.left, $editor.clientWidth - $slashMenu.offsetWidth - 8)
+  );
+
+  $slashMenu.style.top = `${top}px`;
+  $slashMenu.style.left = `${left}px`;
+}
+
+function renderSlashMenu() {
+  if (!$slashMenu) return;
+
+  $slashMenu.innerHTML = '';
+  slashMenuItems.forEach((item, index) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `slash-menu-item${index === slashMenuSelectedIndex ? ' is-active' : ''}`;
+    button.setAttribute('role', 'option');
+    button.setAttribute('aria-selected', index === slashMenuSelectedIndex ? 'true' : 'false');
+
+    const label = document.createElement('span');
+    label.className = 'slash-menu-label';
+    label.textContent = item.label;
+
+    const description = document.createElement('span');
+    description.className = 'slash-menu-description';
+    description.textContent = item.description;
+
+    const preview = document.createElement('span');
+    preview.className = 'slash-menu-preview';
+    preview.textContent = item.preview;
+
+    button.append(label, description, preview);
+    button.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+      applySlashMenuItem(index);
+    });
+    $slashMenu.appendChild(button);
+  });
+
+  $slashMenu.hidden = false;
+  $slashMenu.setAttribute('aria-hidden', 'false');
+  requestAnimationFrame(() => positionSlashMenu());
+}
+
+function updateSlashMenu() {
+  const previousFilter = slashMenuContext?.filter;
+  const context = parseSlashContext($editor.value, $editor.selectionStart);
+  if (!context?.token) {
+    hideSlashMenu();
+    return;
+  }
+
+  slashMenuContext = context;
+  if (previousFilter !== context.filter) {
+    slashMenuSelectedIndex = 0;
+  }
+
+  slashMenuItems = getSlashMenuItems(context.filter, snippetCache, formatDate);
+
+  if (!slashMenuItems.length) {
+    hideSlashMenu();
+    return;
+  }
+
+  if (slashMenuSelectedIndex >= slashMenuItems.length) {
+    slashMenuSelectedIndex = 0;
+  }
+
+  renderSlashMenu();
+}
+
+function applySlashMenuItem(index) {
+  const item = slashMenuItems[index];
+  if (!item || !slashMenuContext) return;
+  applySlashCommand(`/${item.name}`, slashMenuContext.start);
+}
+
+function tryExpandSlashOnSpace() {
+  const pos = $editor.selectionStart;
+  if (pos < 2 || $editor.value[pos - 1] !== ' ') return false;
+
+  const beforeSpace = $editor.value.slice(0, pos - 1);
+  const match = beforeSpace.match(/(?:^|\s)(\/[a-zA-Z0-9_]+)$/);
+  if (!match) return false;
+
+  const token = match[1];
+  const start = beforeSpace.length - token.length;
+  applySlashCommand(token, start);
+  return true;
+}
+
+function openSearchModal() {
+  if ($app.style.display === 'none') return;
+
+  openModal($searchModal);
+  $searchScopeSelect.value = currentSearchScope;
+  $searchInput.focus();
+  if (typeof lucide !== 'undefined') {
+    setTimeout(() => lucide.createIcons(), 0);
+  }
+}
+
+function openHelpModal() {
+  if ($app.style.display === 'none') return;
+
+  openModal($helpModal);
+  if (typeof lucide !== 'undefined') {
+    setTimeout(() => lucide.createIcons(), 0);
+  }
 }
 
 
@@ -789,6 +1100,8 @@ $yearSelect.addEventListener('change', async () => {
   currentDocId = null;
   renderYearOptions();
   $editor.value = '';
+  editorHistory.clear();
+  hideSlashMenu();
   syncSaveTracking();
   updateLineCounter();
   await createDocument(nextYear);
@@ -829,15 +1142,15 @@ $btnSettingsMenu.addEventListener('click', async () => {
   $profileDropdown.setAttribute('aria-hidden', 'true');
 });
 
-// Search modal
-$btnSearchModal.addEventListener('click', () => {
-  openModal($searchModal);
-  $searchScopeSelect.value = currentSearchScope;
-  $searchInput.focus();
-  if (typeof lucide !== 'undefined') {
-    setTimeout(() => lucide.createIcons(), 0);
-  }
+$btnHelpMenu.addEventListener('click', () => {
+  openHelpModal();
+  $profileDropdown.setAttribute('aria-hidden', 'true');
 });
+
+// Search modal
+$btnSearchModal.addEventListener('click', openSearchModal);
+
+$btnAppendDate.addEventListener('click', appendTodayDateHeader);
 
 $btnRunSearch.addEventListener('click', () => {
   runSearch();
@@ -885,16 +1198,23 @@ function runSearch() {
 }
 
 // Slash commands: /today /tomorrow -> dd-MM-yyyy, /time -> H:M, /line -> 36 hyphens
-function handleSlashCommands() {
-  const pos = $editor.selectionStart;
+function applySlashCommand(token, startOverride) {
+  const pos = $editor.selectionEnd;
   const before = $editor.value.slice(0, pos);
   const after = $editor.value.slice(pos);
-  const match = before.match(/(?:^|\s)(\/[a-zA-Z0-9_]+)$/);
-  if (!match) return;
-
-  const token = match[1];
-  const start = before.length - token.length;
+  const start = Number.isInteger(startOverride)
+    ? startOverride
+    : before.length - token.length;
   let replacement;
+
+  if (token !== '/today' && token !== '/tomorrow' && token !== '/time' && token !== '/line') {
+    const snippetName = token.slice(1);
+    if (!snippetsByName.get(snippetName)?.content) {
+      return;
+    }
+  }
+
+  editorHistory.beforeEdit($editor);
 
   if (token === '/today') {
     replacement = formatDate(new Date());
@@ -908,7 +1228,6 @@ function handleSlashCommands() {
   } else if (token === '/line') {
     replacement = '-'.repeat(36);
 
-    // Check if current line starts with bullet point and replace entire line
     const lineStart = before.lastIndexOf('\n') + 1;
     const currentLine = before.slice(lineStart);
 
@@ -918,12 +1237,17 @@ function handleSlashCommands() {
       $editor.value = replaced;
       const newPos = lineStart + replacement.length;
       $editor.selectionStart = $editor.selectionEnd = newPos;
+      hideSlashMenu();
+      scheduleSave();
+      updateLineCounter();
       return;
     }
   } else {
-    // Check if it's a custom snippet
-    const snippetName = token.slice(1); // Remove leading /
+    const snippetName = token.slice(1);
     handleSnippetCommand(snippetName, start, before, after);
+    hideSlashMenu();
+    scheduleSave();
+    updateLineCounter();
     return;
   }
 
@@ -932,6 +1256,9 @@ function handleSlashCommands() {
 
   const newPos = start + replacement.length;
   $editor.selectionStart = $editor.selectionEnd = newPos;
+  hideSlashMenu();
+  scheduleSave();
+  updateLineCounter();
 }
 
 function handleSnippetCommand(snippetName, start, before, after) {
@@ -1071,7 +1398,9 @@ function scrollSelectionIntoView(selectionStart) {
 }
 
 function searchDocuments(query) {
-  const loweredQuery = query.toLowerCase();
+  const queryInfo = parseSearchQuery(query);
+  if (queryInfo.type === 'empty') return [];
+
   const sources = currentSearchScope === 'all'
     ? getAvailableYears().map((year) => ({
         year,
@@ -1088,7 +1417,7 @@ function searchDocuments(query) {
     const lines = content.split('\n');
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      if (line.toLowerCase().includes(loweredQuery)) {
+      if (lineMatchesQuery(line, queryInfo)) {
         results.push({ year, i, line });
       }
     }
@@ -1132,7 +1461,7 @@ async function persistContent(isForced = false) {
   } catch (err) {
     handleSaveError(err);
     if (!isForced) {
-      alert('Failed to save your document. Please try again.');
+      showToast('Failed to save your document. Please try again.', { type: 'error' });
     }
     return false;
   }
@@ -1144,12 +1473,12 @@ async function ensureCurrentDocumentIsSafe(nextActionLabel = 'continue') {
 
   if (pendingRemoteConflict?.docId === currentDocId) {
     showRemoteConflictBanner();
-    alert(`Resolve the newer version from another device before you ${nextActionLabel}.`);
+    showToast(`Resolve the newer version from another device before you ${nextActionLabel}.`, { type: 'error' });
     return false;
   }
 
   if (hasUnsavedEditorChanges()) {
-    alert(`We could not save your latest changes yet. Please try again before you ${nextActionLabel}.`);
+    showToast(`We could not save your latest changes yet. Please try again before you ${nextActionLabel}.`, { type: 'error' });
     return false;
   }
 
@@ -1165,18 +1494,25 @@ async function saveSnapshot(content, year = currentYear) {
     return;
   }
 
-  const snapshotId = id();
+  const snapshotId = createEntityId();
 
   try {
-    await db.transact([
-      tx.snapshots[snapshotId].update({
-        userId: currentUser.id,
-        year,
-        content,
-        createdAt: now,
-        pinned: false,
-      }),
-    ]);
+    const snapshot = {
+      id: snapshotId,
+      userId: currentUser.id,
+      year,
+      content,
+      createdAt: now,
+      pinned: false,
+    };
+
+    if (isDevBypass) {
+      addLocalSnapshot(snapshot);
+    } else {
+      await db.transact([
+        tx.snapshots[snapshotId].update(snapshot),
+      ]);
+    }
 
     lastSnapshotTime = now;
     // Cleanup is handled by the snapshot subscription
@@ -1217,6 +1553,8 @@ async function promptForNewYear() {
   currentDocId = null;
   renderYearOptions();
   $editor.value = '';
+  editorHistory.clear();
+  hideSlashMenu();
   syncSaveTracking();
   localUpdatedAt = 0;
   updateLineCounter();
@@ -1276,48 +1614,48 @@ function getYearFilename(year) {
 
 function exportAllYears() {
   const years = getAvailableYears();
-  if (!years.length) {
-    downloadText($editor.value, getYearFilename(currentYear));
-    return;
-  }
-
-  years.forEach((year, index) => {
-    const doc = documentsByYear.get(year);
-    window.setTimeout(() => {
-      downloadText(doc?.content || '', getYearFilename(year));
-    }, index * 180);
+  const exportYears = years.length ? years : [currentYear];
+  const combined = buildAllYearsExport(exportYears, (year) => {
+    if (year === currentYear) {
+      return $editor.value;
+    }
+    return documentsByYear.get(year)?.content || '';
   });
+
+  downloadText(combined, getAllYearsExportFilename());
 }
 
 // Snapshots modal
 async function showSnapshotsModal() {
   if (!currentUser) return;
 
-  const { data } = await db.queryOnce({
-    snapshots: {
-      $: {
-        where: {
-          userId: currentUser.id,
+  const allSnapshots = isDevBypass
+    ? getLocalSnapshots(currentUser.id)
+    : (await db.queryOnce({
+        snapshots: {
+          $: {
+            where: {
+              userId: currentUser.id,
+            },
+          },
         },
-      },
-    },
-  });
+      })).data?.snapshots || [];
 
   // Separate pinned and unpinned snapshots
-  const allSnapshots = (data?.snapshots || []).filter(
+  const yearSnapshots = allSnapshots.filter(
     (snapshot) => (snapshot.year || currentYear) === currentYear
   );
-  const pinnedSnapshots = allSnapshots.filter(s => s.pinned).sort(
+  const pinnedSnapshots = yearSnapshots.filter(s => s.pinned).sort(
     (a, b) => b.createdAt - a.createdAt
   );
-  const unpinnedSnapshots = allSnapshots.filter(s => !s.pinned).sort(
+  const unpinnedSnapshots = yearSnapshots.filter(s => !s.pinned).sort(
     (a, b) => b.createdAt - a.createdAt
   );
 
   const $list = document.getElementById('snapshot-list');
   $list.innerHTML = '';
 
-  if (!allSnapshots.length) {
+  if (!yearSnapshots.length) {
     const li = document.createElement('li');
     li.innerHTML = '<span class="time">No snapshots yet</span>';
     $list.appendChild(li);
@@ -1373,6 +1711,7 @@ function appendSnapshotItem(snapshot, $list, isPinned) {
   restoreBtn.setAttribute('aria-label', 'Restore');
   restoreBtn.title = 'Restore';
   restoreBtn.addEventListener('click', async () => {
+    editorHistory.beforeEdit($editor);
     $editor.value = snapshot.content || '';
     syncSaveTracking();
     scheduleSave();
@@ -1394,15 +1733,19 @@ function appendSnapshotItem(snapshot, $list, isPinned) {
   pinBtn.className = isPinned ? 'pin-btn pinned' : 'pin-btn';
   pinBtn.addEventListener('click', async () => {
     try {
-      await db.transact([
-        tx.snapshots[snapshot.id].update({
-          pinned: !isPinned,
-        }),
-      ]);
+      if (isDevBypass) {
+        updateLocalSnapshot(snapshot.id, { pinned: !isPinned });
+      } else {
+        await db.transact([
+          tx.snapshots[snapshot.id].update({
+            pinned: !isPinned,
+          }),
+        ]);
+      }
       showSnapshotsModal();
     } catch (err) {
       console.error('Error toggling pin:', err);
-      alert('Failed to update snapshot. Please try again.');
+      showToast('Failed to update snapshot. Please try again.', { type: 'error' });
     }
   });
 
@@ -1416,13 +1759,138 @@ function appendSnapshotItem(snapshot, $list, isPinned) {
 }
 
 // Modal helpers
+function getFocusableElements(container) {
+  return Array.from(container.querySelectorAll(FOCUSABLE_SELECTOR))
+    .filter((el) => !el.disabled && el.getAttribute('aria-hidden') !== 'true');
+}
+
+function getOpenModal() {
+  if (activeModal?.getAttribute('aria-hidden') === 'false') {
+    return activeModal;
+  }
+
+  return Array.from(document.querySelectorAll('.modal')).find(
+    (modal) => modal.getAttribute('aria-hidden') === 'false'
+  ) || null;
+}
+
 function openModal(modal) {
+  if (activeModal && activeModal !== modal) {
+    closeModal(activeModal);
+  }
+
+  modalReturnFocus = document.activeElement;
   modal.setAttribute('aria-hidden', 'false');
+  activeModal = modal;
+
+  requestAnimationFrame(() => {
+    const content = modal.querySelector('.modal-content');
+    if (!content) return;
+    const [firstFocusable] = getFocusableElements(content);
+    firstFocusable?.focus();
+  });
 }
 
 function closeModal(modal) {
   modal.setAttribute('aria-hidden', 'true');
+
+  if (activeModal === modal) {
+    activeModal = null;
+  }
+
+  const returnTarget = modalReturnFocus;
+  modalReturnFocus = null;
+
+  if (returnTarget && typeof returnTarget.focus === 'function' && document.contains(returnTarget)) {
+    returnTarget.focus();
+  } else if ($editor && $app.style.display !== 'none') {
+    $editor.focus();
+  }
 }
+
+function dismissTopModal() {
+  const modal = getOpenModal();
+  if (!modal) return false;
+
+  if (modal === $newYearModal && newYearResolver) {
+    resolveNewYearModal(null);
+    return true;
+  }
+
+  closeModal(modal);
+  return true;
+}
+
+function handleModalTabTrap(e) {
+  if (e.key !== 'Tab') return;
+
+  const modal = getOpenModal();
+  if (!modal) return;
+
+  const content = modal.querySelector('.modal-content');
+  if (!content) return;
+
+  const focusable = getFocusableElements(content);
+  if (!focusable.length) return;
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
+}
+
+document.addEventListener('keydown', (e) => {
+  handleModalTabTrap(e);
+
+  if (e.key !== 'Escape') return;
+
+  if (dismissTopModal()) {
+    e.preventDefault();
+    return;
+  }
+
+  if ($profileDropdown?.getAttribute('aria-hidden') === 'false') {
+    $profileDropdown.setAttribute('aria-hidden', 'true');
+    $editor?.focus();
+    e.preventDefault();
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  const mod = e.metaKey || e.ctrlKey;
+  if (!mod) return;
+
+  if (e.key === 'k' || e.key === 'K') {
+    e.preventDefault();
+    openSearchModal();
+    return;
+  }
+
+  if (e.key === 'f' || e.key === 'F') {
+    if ($app.style.display === 'none') return;
+    e.preventDefault();
+    openSearchModal();
+    return;
+  }
+
+  if (e.key === '/') {
+    e.preventDefault();
+    openHelpModal();
+    return;
+  }
+
+  if (e.shiftKey && (e.key === 'd' || e.key === 'D')) {
+    if ($app.style.display === 'none') return;
+    e.preventDefault();
+    appendTodayDateHeader();
+  }
+});
 
 Array.from(document.querySelectorAll('.modal .modal-close')).forEach((btn) => {
   btn.addEventListener('click', (e) => {
@@ -1484,34 +1952,122 @@ $btnConfirmNewYear.addEventListener('click', () => {
 });
 
 // Events
+$editor.addEventListener('beforeinput', (e) => {
+  if (isHistoryInput(e)) {
+    e.preventDefault();
+    return;
+  }
+
+  editorHistory.markBurstStart($editor);
+});
+
 $editor.addEventListener('input', () => {
-  handleSlashCommands();
+  if (tryExpandSlashOnSpace()) {
+    hideSlashMenu();
+  } else {
+    updateSlashMenu();
+  }
+
+  editorHistory.recordDebounced($editor);
   scheduleSave();
   updateLineCounter();
 });
 
 $editor.addEventListener('keydown', (e) => {
+  if (!isUndoShortcut(e)) return;
+
+  e.preventDefault();
+  e.stopPropagation();
+
+  if (editorHistory.undo($editor)) {
+    hideSlashMenu();
+    scheduleSave();
+    updateLineCounter();
+  }
+}, true);
+
+$editor.addEventListener('keydown', (e) => {
+  if (isUndoShortcut(e)) {
+    return;
+  }
+
+  if (e.key === 'Backspace' || e.key === 'Delete') {
+    editorHistory.prepareDeleteBurst($editor);
+  } else if (
+    e.key.length === 1 &&
+    !e.metaKey &&
+    !e.ctrlKey &&
+    !e.altKey
+  ) {
+    editorHistory.markBurstStart($editor);
+  }
+
+  if (isSlashMenuOpen()) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      slashMenuSelectedIndex = (slashMenuSelectedIndex + 1) % slashMenuItems.length;
+      renderSlashMenu();
+      return;
+    }
+
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      slashMenuSelectedIndex =
+        (slashMenuSelectedIndex - 1 + slashMenuItems.length) % slashMenuItems.length;
+      renderSlashMenu();
+      return;
+    }
+
+    if (e.key === 'Enter' || e.key === 'Tab') {
+      e.preventDefault();
+      applySlashMenuItem(slashMenuSelectedIndex);
+      return;
+    }
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      hideSlashMenu();
+      return;
+    }
+  }
+
   // Enter -> add hyphen, Shift+Enter -> plain newline
   if (e.key === 'Enter') {
     e.preventDefault();
+    hideSlashMenu();
+
     const pos = $editor.selectionStart;
     const before = $editor.value.slice(0, pos);
     const after = $editor.value.slice($editor.selectionEnd);
 
+    editorHistory.beforeEdit($editor);
+
     if (e.shiftKey) {
-      // Shift+Enter: just newline, no hyphen
       $editor.value = before + '\n' + after;
       const newPos = pos + 1;
       $editor.selectionStart = $editor.selectionEnd = newPos;
     } else {
-      // Enter: newline + hyphen
       $editor.value = before + '\n- ' + after;
-      const newPos = pos + 3; // after "\n- "
+      const newPos = pos + 3;
       $editor.selectionStart = $editor.selectionEnd = newPos;
     }
 
     scheduleSave();
     updateLineCounter();
+  }
+});
+
+$editor.addEventListener('blur', () => {
+  window.setTimeout(() => {
+    if (!$slashMenu?.contains(document.activeElement)) {
+      hideSlashMenu();
+    }
+  }, 120);
+});
+
+$editor.addEventListener('scroll', () => {
+  if (isSlashMenuOpen()) {
+    positionSlashMenu();
   }
 });
 
@@ -1766,8 +2322,8 @@ $btnSaveFormat.addEventListener('click', () => {
   }, 1000);
 });
 
-$btnResetFormat.addEventListener('click', () => {
-  if (confirm('Reset text formatting to default settings?')) {
+$btnResetFormat.addEventListener('click', async () => {
+  if (await showConfirm('Reset text formatting to default settings?')) {
     resetTextFormatting();
   }
 });
@@ -1804,8 +2360,12 @@ async function showSnippetsModal() {
       const deleteBtn = document.createElement('button');
       deleteBtn.textContent = 'Delete';
       deleteBtn.addEventListener('click', async () => {
-        if (confirm(`Delete snippet /${snippet.name}?`)) {
-          await db.transact([tx.snippets[snippet.id].delete()]);
+        if (await showConfirm(`Delete snippet /${snippet.name}?`)) {
+          if (isDevBypass) {
+            deleteLocalSnippet(snippet.id);
+          } else {
+            await db.transact([tx.snippets[snippet.id].delete()]);
+          }
           removeSnippetFromCache(snippet.id);
           showSnippetsModal();
         }
@@ -1858,74 +2418,81 @@ $btnSaveSnippet.addEventListener('click', async () => {
   const content = $snippetContent.value.trim();
 
   if (!name) {
-    alert('Please enter a snippet name');
+    showToast('Please enter a snippet name', { type: 'error' });
     return;
   }
 
   if (!content) {
-    alert('Please enter snippet content');
+    showToast('Please enter snippet content', { type: 'error' });
     return;
   }
 
   // Validate name format (alphanumeric and underscore only)
   if (!/^[a-z0-9_]+$/.test(name)) {
-    alert('Snippet name must contain only letters, numbers, and underscores (no spaces)');
+    showToast('Snippet name must contain only letters, numbers, and underscores (no spaces)', { type: 'error' });
     return;
   }
 
   // Validate name length (max 17 characters)
   if (name.length > 17) {
-    alert('Snippet name must be 17 characters or less');
+    showToast('Snippet name must be 17 characters or less', { type: 'error' });
     return;
   }
 
   try {
     if (currentEditingSnippetId) {
-      // Update existing snippet
       const updatedAt = Date.now();
-      await db.transact([
-        tx.snippets[currentEditingSnippetId].update({
-          name,
-          content,
-          updatedAt,
-        }),
-      ]);
       const existingSnippet = snippetCache.find(
         (snippet) => snippet.id === currentEditingSnippetId
       );
-      upsertSnippetCache({
+      const nextSnippet = {
         ...(existingSnippet || {}),
         id: currentEditingSnippetId,
+        userId: currentUser.id,
         name,
         content,
         updatedAt,
-      });
+      };
+
+      if (isDevBypass) {
+        upsertLocalSnippet(nextSnippet);
+      } else {
+        await db.transact([
+          tx.snippets[currentEditingSnippetId].update({
+            name,
+            content,
+            updatedAt,
+          }),
+        ]);
+      }
+
+      upsertSnippetCache(nextSnippet);
     } else {
-      // Create new snippet
-      const snippetId = id();
+      const snippetId = createEntityId();
       const createdAt = Date.now();
-      await db.transact([
-        tx.snippets[snippetId].update({
-          userId: currentUser.id,
-          name,
-          content,
-          createdAt,
-          updatedAt: createdAt,
-        }),
-      ]);
-      upsertSnippetCache({
+      const nextSnippet = {
         createdAt,
         id: snippetId,
         name,
         content,
         updatedAt: createdAt,
         userId: currentUser.id,
-      });
+      };
+
+      if (isDevBypass) {
+        upsertLocalSnippet(nextSnippet);
+      } else {
+        await db.transact([
+          tx.snippets[snippetId].update(nextSnippet),
+        ]);
+      }
+
+      upsertSnippetCache(nextSnippet);
     }
 
     showSnippetsModal();
   } catch (err) {
-    alert('Error saving snippet: ' + err.message);
+    showToast('Error saving snippet: ' + err.message, { type: 'error' });
   }
 });
 
@@ -2243,6 +2810,10 @@ function setSnippetCache(snippets) {
       snippetsByName.set(snippet.name, snippet);
     }
   });
+
+  if (isSlashMenuOpen()) {
+    updateSlashMenu();
+  }
 }
 
 function upsertSnippetCache(snippet) {
