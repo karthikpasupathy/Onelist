@@ -252,8 +252,15 @@ button:active {
 .actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   min-width: 0;
+}
+
+.toolbar-icons {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
 }
 
 .save-indicator {
@@ -1093,10 +1100,16 @@ div[style*="z-index: 2147483647"] {
   }
 
   .actions {
+    flex: 1 1 auto;
+    min-width: 0;
     justify-content: flex-end;
     flex-wrap: nowrap;
     margin-left: auto;
-    flex: 0 0 auto;
+    gap: 16px;
+  }
+
+  .toolbar-icons {
+    gap: 14px;
   }
 
   .save-indicator {
@@ -1134,6 +1147,10 @@ div[style*="z-index: 2147483647"] {
 
   .update-banner-actions {
     justify-content: flex-end;
+  }
+
+  .year-select-wrap {
+    flex: 0 1 auto;
   }
 
   .year-select {
@@ -1264,7 +1281,7 @@ div[style*="z-index: 2147483647"] {
   .actions {
     display: flex;
     flex-wrap: nowrap;
-    gap: 6px;
+    gap: 18px;
     flex: 1 1 0;
     min-width: 0;
     margin-left: 0;
@@ -1272,9 +1289,14 @@ div[style*="z-index: 2147483647"] {
     justify-content: flex-end;
   }
 
+  .toolbar-icons {
+    gap: 16px;
+  }
+
   .year-select-wrap {
-    flex: 1 1 auto;
+    flex: 0 1 auto;
     min-width: 90px;
+    max-width: 118px;
   }
 
   .year-select {
