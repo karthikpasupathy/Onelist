@@ -893,17 +893,31 @@ function formatDate(d) {
   return `${dd}-${mm}-${yyyy}`;
 }
 
+function buildDateHeaderBlock(before, after, dateStr) {
+  const header = `${dateStr}\n- `;
+
+  if (!before && !after) return header;
+  if (!before) return header;
+  if (before.endsWith('\n\n')) return header;
+  if (before.endsWith('\n')) return `\n${header}`;
+  return `\n\n${header}`;
+}
+
 function appendTodayDateHeader() {
   if (!$editor) return;
 
+  $editor.focus();
+
   const dateStr = formatDate(new Date());
-  const addition = $editor.value.trim() === ''
-    ? `${dateStr}\n- `
-    : `\n\n${dateStr}\n- `;
+  const pos = $editor.selectionStart;
+  const before = $editor.value.slice(0, pos);
+  const after = $editor.value.slice(pos);
+  const addition = buildDateHeaderBlock(before, after, dateStr);
 
   editorHistory.beforeEdit($editor);
-  $editor.value += addition;
-  placeCursorAtEnd();
+  $editor.value = before + addition + after;
+  const newPos = pos + addition.length;
+  $editor.selectionStart = $editor.selectionEnd = newPos;
   scheduleSave();
   updateLineCounter();
 }
@@ -1150,6 +1164,9 @@ $btnHelpMenu.addEventListener('click', () => {
 // Search modal
 $btnSearchModal.addEventListener('click', openSearchModal);
 
+$btnAppendDate.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+});
 $btnAppendDate.addEventListener('click', appendTodayDateHeader);
 
 $btnRunSearch.addEventListener('click', () => {
