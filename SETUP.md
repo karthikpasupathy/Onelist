@@ -28,13 +28,24 @@ VITE_INSTANT_APP_ID=your-instantdb-app-id
 
 > **Note**: `.env.local` is git-ignored and won't be committed to your repository.
 
-### 3. Run the Development Server
+### 3. Configure InstantDB Schema and Permissions
+
+The repo includes `instant.schema.ts` and `instant.perms.ts` for the production
+data model and owner-only access rules. Push them to your Instant app after
+creating or changing the app:
+
+```bash
+npx instant-cli@latest push schema
+npx instant-cli@latest push perms
+```
+
+### 4. Run the Development Server
 ```bash
 npm run dev
 ```
 This runs the frontend on `http://localhost:5173`
 
-### 4. Access the App
+### 5. Access the App
 
 Open `http://localhost:5173` in your browser.
 
@@ -108,6 +119,18 @@ Each fork operates independently with isolated data.
 ### How Secrets are Protected
 
 - **InstantDB App ID**: Injected at build time via Vite into the frontend bundle
+
+### Sync Reliability
+
+- InstantDB handles auth, realtime subscriptions, and server persistence.
+- OneList stores the active document draft in IndexedDB with `docId`, `year`,
+  `content`, `baseContent`, `baseUpdatedAt`, `localEditAt`, and dirty state.
+- Offline edits stay marked dirty until reconnect, then reconcile against the
+  latest server snapshot before saving.
+- Same-region text conflicts preserve both sides in an `ONELIST MERGE CONFLICT`
+  block; different line regions merge silently.
+- Each user-year document uses a deterministic `docKey`/UUID to prevent duplicate
+  year records from competing tabs or devices.
 
 ---
 

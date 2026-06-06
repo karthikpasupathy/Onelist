@@ -3,8 +3,8 @@
 // Given a common ancestor (`base`) and two independently edited versions
 // (`mine` and `theirs`), produce a merged result. Edits that touch different
 // regions are combined losslessly. When both sides changed the exact same
-// region in different ways, the `conflictWinner` side is kept (callers pass the
-// newer document's side so "newest wins").
+// region in different ways, both versions are kept in a deterministic conflict
+// block so sync never silently discards text.
 
 function splitLines(text) {
   return (text ?? '').split('\n');
@@ -16,6 +16,16 @@ function slicesEqual(a, b) {
     if (a[i] !== b[i]) return false;
   }
   return true;
+}
+
+function formatConflictBlock(mineSlice, theirsSlice) {
+  return [
+    '<<<<<<< ONELIST LOCAL',
+    ...mineSlice,
+    '||||||| ONELIST REMOTE',
+    ...theirsSlice,
+    '>>>>>>> ONELIST MERGE CONFLICT',
+  ];
 }
 
 // Longest common subsequence between two line arrays, returned as matched
@@ -74,7 +84,7 @@ function commonAnchors(baseLines, mineLines, theirsLines) {
   return anchors;
 }
 
-export function mergeThreeWay(base, mine, theirs, { conflictWinner = 'mine' } = {}) {
+export function mergeThreeWay(base, mine, theirs) {
   const baseStr = base ?? '';
   const mineStr = mine ?? '';
   const theirsStr = theirs ?? '';
@@ -111,7 +121,7 @@ export function mergeThreeWay(base, mine, theirs, { conflictWinner = 'mine' } = 
     } else if (slicesEqual(mineSlice, theirsSlice)) {
       merged.push(...mineSlice);
     } else {
-      merged.push(...(conflictWinner === 'theirs' ? theirsSlice : mineSlice));
+      merged.push(...formatConflictBlock(mineSlice, theirsSlice));
     }
   };
 
@@ -128,9 +138,8 @@ export function mergeThreeWay(base, mine, theirs, { conflictWinner = 'mine' } = 
   return merged.join('\n');
 }
 
-// Convenience wrapper that picks the conflict winner from save timestamps so
-// the most recently written side prevails on a true line-level conflict.
-export function mergeByRecency(base, mine, theirs, { mineUpdatedAt = 0, theirsUpdatedAt = 0 } = {}) {
-  const conflictWinner = (theirsUpdatedAt || 0) > (mineUpdatedAt || 0) ? 'theirs' : 'mine';
-  return mergeThreeWay(base, mine, theirs, { conflictWinner });
+// Compatibility wrapper for callers that still pass timestamps. Conflict output
+// is timestamp-independent so skewed device clocks cannot choose a lossy winner.
+export function mergeByRecency(base, mine, theirs) {
+  return mergeThreeWay(base, mine, theirs);
 }

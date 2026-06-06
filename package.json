@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "npm run build && node --test tests/saveCoordinator.test.js tests/snippetExpansion.test.js tests/searchUtils.test.js tests/localDevStore.test.js tests/slashMenu.test.js tests/editorHistory.test.js tests/editorShortcuts.test.js tests/documentCache.test.js tests/syncGuard.test.js tests/syncFlow.test.js tests/textMerge.test.js tests/exportUtils.test.js tests/buildOutput.test.js"
+    "test": "npm run build && node --test tests/saveCoordinator.test.js tests/snippetExpansion.test.js tests/searchUtils.test.js tests/localDevStore.test.js tests/slashMenu.test.js tests/editorHistory.test.js tests/editorShortcuts.test.js tests/documentIdentity.test.js tests/documentCache.test.js tests/syncGuard.test.js tests/syncFlow.test.js tests/textMerge.test.js tests/exportUtils.test.js tests/buildOutput.test.js"
   },
   "devDependencies": {
     "vercel": "^48.12.1",

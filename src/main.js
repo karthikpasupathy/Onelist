@@ -1,6 +1,7 @@
 // main.js - OneList with InstantDB
 import { init, tx, id } from '@instantdb/core';
 import { registerSW } from 'virtual:pwa-register';
+import schema from '../instant.schema.ts';
 import { createSaveCoordinator } from './saveCoordinator.js';
 import { expandSnippetCommand } from './snippetExpansion.js';
 import { lineMatchesQuery, parseSearchQuery } from './searchUtils.js';
@@ -31,6 +32,7 @@ import {
   upsertSnippet as upsertLocalSnippet,
 } from './localDevStore.js';
 import { readDocumentCache, writeDocumentCache } from './documentCache.js';
+import { createDocumentIdentity } from './documentIdentity.js';
 import {
   shouldBlockSaveOverRemote,
   shouldQueueBackupConflict,
@@ -51,10 +53,15 @@ if (!APP_ID && !isDevBypass) {
 }
 
 // Initialize InstantDB (skipped in local dev bypass mode)
-const db = APP_ID ? init({ appId: APP_ID }) : null;
+const db = APP_ID ? init({ appId: APP_ID, schema }) : null;
 
 function createEntityId() {
   return isDevBypass ? createLocalId() : id();
+}
+
+function createDocumentEntityIdentity(year) {
+  if (!currentUser) return { docId: createEntityId(), docKey: '' };
+  return createDocumentIdentity(currentUser.id, year);
 }
 
 // Elements
@@ -210,7 +217,7 @@ const saveCoordinator = createSaveCoordinator({
 
     let contentToSave = content;
 
-    const serverDoc = await fetchServerDocument(docId);
+    const serverDoc = getKnownServerDocument(docId, year);
     if (
       serverDoc &&
       shouldBlockSaveOverRemote({
@@ -250,7 +257,7 @@ const saveCoordinator = createSaveCoordinator({
         tx.documents[docId].update({
           content: contentToSave,
           updatedAt: now,
-        }),
+        }, { upsert: false }),
       ]);
     }
 
@@ -265,7 +272,7 @@ const saveCoordinator = createSaveCoordinator({
 
     localUpdatedAt = now;
     baseContent = contentToSave;
-    syncDocumentCache(contentToSave);
+    syncDocumentCache(contentToSave, { dirty: false });
     clearBackupForDocument(docId);
     console.log(`[Sync] Saved to server (${new Date(now).toISOString()})`);
     await saveSnapshot(contentToSave, year);
@@ -277,6 +284,16 @@ const saveCoordinator = createSaveCoordinator({
 if (isDevBypass) {
   startDevSession();
 } else {
+  db.subscribeConnectionStatus?.((status) => {
+    if (status === 'authenticated') {
+      refreshSaveIndicator();
+    } else if (status === 'closed') {
+      updateSaveIndicator('offline');
+    } else if (status === 'errored') {
+      updateSaveIndicator('error');
+    }
+  });
+
   db.subscribeAuth((auth) => {
     if (auth.user) {
       activateUserSession(auth.user);
@@ -286,14 +303,14 @@ if (isDevBypass) {
   });
 }
 
-function activateUserSession(user) {
+async function activateUserSession(user) {
   currentUser = user;
   currentYear = getStoredYear();
   if ($userEmail && user.email) {
     $userEmail.textContent = user.email;
   }
   showApp();
-  const hadCachedDocument = applyCachedDocumentForStartup(user.id);
+  const hadCachedDocument = await applyCachedDocumentForStartup(user.id);
   if (!hadCachedDocument) {
     setEditorBootstrapping(true);
   }
@@ -351,44 +368,41 @@ function setEditorBootstrapping(isBootstrapping) {
   $editorWrap?.classList.toggle('is-bootstrapping', isBootstrapping);
 }
 
-function applyCachedDocumentForStartup(userId) {
-  const cached = readDocumentCache(userId, currentYear);
+async function applyCachedDocumentForStartup(userId) {
+  const cached = await readDocumentCache(userId, currentYear);
   if (!cached) return false;
 
   currentDocId = cached.docId;
-  localUpdatedAt = cached.updatedAt;
+  localUpdatedAt = cached.baseUpdatedAt || cached.updatedAt || 0;
   baseContent = cached.baseContent;
   $editor.value = cached.content;
   saveCoordinator.reset(cached.content);
+  if (cached.dirty) {
+    saveCoordinator.markDirty(cached.content);
+  }
   updateLineCounter();
   editorHistory.clear();
-  console.log(`[Cache] Restored year ${currentYear} from local cache`);
+  console.log(`[Cache] Restored year ${currentYear} from IndexedDB draft cache`);
   return true;
 }
 
-function syncDocumentCache(content = $editor.value) {
+function syncDocumentCache(content = $editor.value, { dirty = hasUnsavedEditorChanges() } = {}) {
   if (!currentUser || !currentDocId || !Number.isInteger(currentYear)) return;
 
   writeDocumentCache(currentUser.id, currentYear, {
     docId: currentDocId,
     content,
-    updatedAt: localUpdatedAt,
+    baseUpdatedAt: localUpdatedAt,
     baseContent,
+    localEditAt: lastLocalEditAt,
+    dirty,
   });
 }
 
-async function fetchServerDocument(docId) {
-  if (!docId || !currentUser) return null;
-
-  if (isDevBypass) {
-    return getLocalDocuments().find((doc) => doc.id === docId && doc.userId === currentUser.id) || null;
-  }
-
-  if (!db) return null;
-
-  const result = await db.queryOnce(getDocumentsQuery());
-  const docs = result.data?.documents || [];
-  return docs.find((doc) => doc.id === docId) || null;
+function getKnownServerDocument(docId, year = currentYear) {
+  const doc = documentsByYear.get(year);
+  if (doc?.id === docId) return doc;
+  return null;
 }
 
 async function refreshRemoteDocumentIfNeeded() {
@@ -687,12 +701,29 @@ async function applyDocumentsSnapshot(docs) {
     return false;
   }
 
-  docs.forEach((doc) => {
+  const canonicalDocs = chooseCanonicalDocuments(docs);
+
+  canonicalDocs.forEach((doc) => {
     const year = Number.isInteger(doc.year) ? doc.year : currentYear;
     documentsByYear.set(year, doc);
   });
 
   return true;
+}
+
+function chooseCanonicalDocuments(docs) {
+  const byYear = new Map();
+
+  docs
+    .filter((doc) => Number.isInteger(doc.year))
+    .forEach((doc) => {
+      const existing = byYear.get(doc.year);
+      if (!existing || (doc.updatedAt || 0) > (existing.updatedAt || 0)) {
+        byYear.set(doc.year, doc);
+      }
+    });
+
+  return Array.from(byYear.values());
 }
 
 async function hydrateFreshDocumentsFromServer() {
@@ -731,11 +762,18 @@ async function hydrateCurrentYearFromMemory() {
 
 async function createDocument(year = currentYear) {
   if (!currentUser || pendingDocumentYears.has(year)) return;
-  const docId = createEntityId();
+  const existingDoc = documentsByYear.get(year);
+  if (existingDoc) {
+    if (year === currentYear) loadYearDocument(year);
+    return;
+  }
+
+  const { docId, docKey } = createDocumentEntityIdentity(year);
   pendingDocumentYears.add(year);
   const createdAt = Date.now();
   const nextDoc = {
     id: docId,
+    docKey,
     userId: currentUser.id,
     year,
     content: year === currentYear ? $editor.value : '',
@@ -881,7 +919,7 @@ function hydrateEditorFromDocument(doc, { allowConflict = true, allowBackupResto
       editorHistory.clear();
       localUpdatedAt = serverUpdatedAt;
       baseContent = incomingContent;
-      syncDocumentCache(backupContent);
+      syncDocumentCache(backupContent, { dirty: true });
       scheduleSave();
       setEditorBootstrapping(false);
       return;
@@ -928,7 +966,7 @@ function hydrateEditorFromDocument(doc, { allowConflict = true, allowBackupResto
   syncSaveTracking();
   updateLineCounter();
   editorHistory.clear();
-  syncDocumentCache(incomingContent);
+  syncDocumentCache(incomingContent, { dirty: false });
   setEditorBootstrapping(false);
   console.log(`[Sync] Loaded year ${doc.year} (${new Date(serverUpdatedAt || Date.now()).toISOString()})`);
 }
@@ -959,11 +997,11 @@ function mergeRemoteIntoEditor(mineContent, serverContent, serverUpdatedAt, mine
   if (merged === serverContent) {
     clearBackupForDocument(currentDocId);
     syncSaveTracking();
-    syncDocumentCache(merged);
+    syncDocumentCache(merged, { dirty: false });
     return;
   }
 
-  syncDocumentCache(merged);
+  syncDocumentCache(merged, { dirty: true });
   scheduleSave();
   console.log('[Sync] Auto-merged remote changes into local edits');
 }
@@ -990,7 +1028,7 @@ function writeDraftBackup(content) {
   try {
     localStorage.setItem(`onelist_backup_${currentDocId}`, content);
     localStorage.setItem(`onelist_backup_time_${currentDocId}`, Date.now().toString());
-    syncDocumentCache(content);
+    syncDocumentCache(content, { dirty: true });
   } catch (err) {
     console.error('[Backup] Failed to persist draft backup:', err);
   }

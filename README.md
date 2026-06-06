@@ -10,7 +10,7 @@ A simple, classy productivity text editor inspired by Jeff Huang's "never-ending
 - **Fast search**: Find any line or #tag instantly
 - **Snapshots**: Automatic backups you can restore anytime
 - **Cross-platform**: Works on desktop and mobile as a PWA
-- **Offline-ready**: Uses InstantDB for sync and offline support
+- **Offline-ready**: Uses InstantDB realtime sync plus an IndexedDB draft outbox for safer reconnects
 
 ## Development
 
@@ -47,9 +47,25 @@ Alternatively, you can:
 - Click "Snapshots" to view, restore, or download previous versions
 - Click "Export" to download your current file
 
+## Sync Model
+
+OneList is optimized for one user syncing a personal text file across devices.
+InstantDB remains the realtime backend, while the browser keeps the current
+draft, merge base, and dirty state in IndexedDB so offline edits can be
+reconciled after reconnect.
+
+When two devices edit different line regions, OneList merges them silently.
+When both devices edit the same unstable region, the app keeps both versions in
+a visible `ONELIST MERGE CONFLICT` block instead of silently choosing a winner.
+
 ## InstantDB Schema
 
-The app uses two entities:
+Schema and permissions live in `instant.schema.ts` and `instant.perms.ts`.
 
-- `documents`: { userId, content, createdAt, updatedAt }
-- `snapshots`: { userId, content, createdAt }
+- `documents`: `{ userId, docKey, year, content, createdAt, updatedAt }`
+- `snapshots`: `{ userId, year, content, createdAt, pinned }`
+- `snippets`: `{ userId, name, content, createdAt, updatedAt }`
+- `settings`: `{ userId, ... }`
+
+Documents use a deterministic `docKey`/UUID per user-year to avoid duplicate
+year documents across tabs and devices. Permissions are owner-only by `userId`.

@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { readDocumentCache, writeDocumentCache } from '../src/documentCache.js';
+import {
+  __resetDocumentCacheForTests,
+  readDocumentCache,
+  writeDocumentCache,
+} from '../src/documentCache.js';
 import {
   shouldBlockSaveOverRemote,
   shouldQueueBackupConflict,
@@ -17,6 +21,8 @@ const YEAR = 2026;
 
 test.beforeEach(() => {
   storage.clear();
+  __resetDocumentCacheForTests();
+  delete globalThis.indexedDB;
   globalThis.localStorage = {
     getItem: (key) => storage.get(key) ?? null,
     setItem: (key, value) => storage.set(key, value),
@@ -24,7 +30,7 @@ test.beforeEach(() => {
   };
 });
 
-function seedLaptopSave(content, updatedAt) {
+async function seedLaptopSave(content, updatedAt) {
   upsertDocument({
     id: DOC_ID,
     userId: USER_ID,
@@ -33,7 +39,7 @@ function seedLaptopSave(content, updatedAt) {
     createdAt: updatedAt,
     updatedAt,
   });
-  writeDocumentCache(USER_ID, YEAR, {
+  await writeDocumentCache(USER_ID, YEAR, {
     docId: DOC_ID,
     content,
     updatedAt,
@@ -44,23 +50,23 @@ function simulatePhoneSave(content, updatedAt) {
   updateDocumentContent(DOC_ID, content, updatedAt);
 }
 
-function laptopStateAfterCacheLoad() {
-  const cached = readDocumentCache(USER_ID, YEAR);
+async function laptopStateAfterCacheLoad() {
+  const cached = await readDocumentCache(USER_ID, YEAR);
   return {
     editorContent: cached.content,
     localUpdatedAt: cached.updatedAt,
   };
 }
 
-test('scenario: phone saves newer content while laptop tab is stale', () => {
+test('scenario: phone saves newer content while laptop tab is stale', async () => {
   const laptopSaveTime = 1_000;
   const phoneSaveTime = 2_000;
 
-  seedLaptopSave('laptop draft', laptopSaveTime);
+  await seedLaptopSave('laptop draft', laptopSaveTime);
 
   simulatePhoneSave('phone finished text', phoneSaveTime);
 
-  const laptop = laptopStateAfterCacheLoad();
+  const laptop = await laptopStateAfterCacheLoad();
   const server = getDocuments()[0];
 
   assert.equal(laptop.editorContent, 'laptop draft');
@@ -92,11 +98,11 @@ test('scenario: phone saves newer content while laptop tab is stale', () => {
   );
 });
 
-test('scenario: laptop reopens after phone sync and should accept remote version', () => {
-  seedLaptopSave('laptop old', 1_000);
+test('scenario: laptop reopens after phone sync and should accept remote version', async () => {
+  await seedLaptopSave('laptop old', 1_000);
   simulatePhoneSave('phone newer', 2_000);
 
-  const laptop = laptopStateAfterCacheLoad();
+  const laptop = await laptopStateAfterCacheLoad();
   const server = getDocuments()[0];
   const hasUnsavedEditorChanges = false;
 
@@ -112,8 +118,8 @@ test('scenario: laptop reopens after phone sync and should accept remote version
   assert.notEqual(laptop.editorContent, server.content);
 });
 
-test('scenario: both devices edited — laptop has unsaved changes when phone saved', () => {
-  seedLaptopSave('shared base', 1_000);
+test('scenario: both devices edited — laptop has unsaved changes when phone saved', async () => {
+  await seedLaptopSave('shared base', 1_000);
   simulatePhoneSave('shared base\nphone line', 2_000);
 
   const laptopEditor = 'shared base\nlaptop line';
@@ -133,9 +139,9 @@ test('scenario: both devices edited — laptop has unsaved changes when phone sa
   assert.equal(hasUnsavedEditorChanges, true);
 });
 
-test('silent merge: disjoint edits from two devices combine without prompting', () => {
+test('silent merge: disjoint edits from two devices combine without prompting', async () => {
   const base = '- groceries\n- gym\n- call mom\n- read';
-  seedLaptopSave(base, 1_000);
+  await seedLaptopSave(base, 1_000);
 
   // Phone edits the "call mom" line and saves; laptop has an unsaved edit on
   // the "groceries" line. The unchanged "gym"/"read" lines anchor the merge so
@@ -154,30 +160,36 @@ test('silent merge: disjoint edits from two devices combine without prompting', 
   assert.equal(merged, '- groceries!\n- gym\n- call mom 6pm\n- read');
 });
 
-test('silent merge: appends from both devices keep the newest line on a true conflict', () => {
+test('silent merge: appends from both devices preserve both lines on a true conflict', async () => {
   const base = 'shared base';
-  seedLaptopSave(base, 1_000);
+  await seedLaptopSave(base, 1_000);
   simulatePhoneSave('shared base\nphone line', 2_000);
 
   const laptopEditor = 'shared base\nlaptop line';
   const server = getDocuments()[0];
 
-  // Laptop edited most recently -> laptop's line wins the trailing conflict.
+  const expected = [
+    'shared base',
+    '<<<<<<< ONELIST LOCAL',
+    'laptop line',
+    '||||||| ONELIST REMOTE',
+    'phone line',
+    '>>>>>>> ONELIST MERGE CONFLICT',
+  ].join('\n');
+
   assert.equal(
     mergeByRecency(base, laptopEditor, server.content, {
       mineUpdatedAt: 3_000,
       theirsUpdatedAt: server.updatedAt,
     }),
-    'shared base\nlaptop line'
+    expected
   );
-
-  // Phone save is newer than the local edit -> phone's line wins.
   assert.equal(
     mergeByRecency(base, laptopEditor, server.content, {
       mineUpdatedAt: 1_500,
       theirsUpdatedAt: server.updatedAt,
     }),
-    'shared base\nphone line'
+    expected
   );
 });
 
@@ -187,7 +199,18 @@ test('silent merge: re-running after the merged save is stable (no duplication)'
     mineUpdatedAt: 3_000,
     theirsUpdatedAt: 2_000,
   });
-  assert.equal(merged, 'a\nb\nlaptop');
+  assert.equal(
+    merged,
+    [
+      'a',
+      'b',
+      '<<<<<<< ONELIST LOCAL',
+      'laptop',
+      '||||||| ONELIST REMOTE',
+      'phone',
+      '>>>>>>> ONELIST MERGE CONFLICT',
+    ].join('\n')
+  );
 
   // After persisting `merged`, base and server both equal it.
   assert.equal(
@@ -196,8 +219,8 @@ test('silent merge: re-running after the merged save is stable (no duplication)'
   );
 });
 
-test('scenario: crash recovery restores draft only for same server version', () => {
-  seedLaptopSave('saved version', 1_000);
+test('scenario: crash recovery restores draft only for same server version', async () => {
+  await seedLaptopSave('saved version', 1_000);
 
   const server = getDocuments()[0];
   const backupContent = 'saved version\nunsaved crash draft';
@@ -241,8 +264,8 @@ test('scenario: crash recovery restores draft only for same server version', () 
   );
 });
 
-test('scenario: typing after save is not treated as a remote conflict', () => {
-  seedLaptopSave('saved text', 1_000);
+test('scenario: typing after save is not treated as a remote conflict', async () => {
+  await seedLaptopSave('saved text', 1_000);
 
   const server = getDocuments()[0];
 
@@ -258,10 +281,10 @@ test('scenario: typing after save is not treated as a remote conflict', () => {
   );
 });
 
-test('scenario: inflated draft cache timestamp must not beat server save time', () => {
-  seedLaptopSave('laptop text', 1_000);
+test('scenario: inflated draft cache timestamp must not beat server save time', async () => {
+  await seedLaptopSave('laptop text', 1_000);
 
-  writeDocumentCache(USER_ID, YEAR, {
+  await writeDocumentCache(USER_ID, YEAR, {
     docId: DOC_ID,
     content: 'laptop text extra typing',
     updatedAt: 1_000,
@@ -269,7 +292,7 @@ test('scenario: inflated draft cache timestamp must not beat server save time', 
 
   simulatePhoneSave('phone text', 2_000);
 
-  const cached = readDocumentCache(USER_ID, YEAR);
+  const cached = await readDocumentCache(USER_ID, YEAR);
   const server = getDocuments()[0];
 
   assert.equal(cached.updatedAt, 1_000, 'cache must keep server-confirmed timestamp');

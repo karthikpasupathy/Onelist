@@ -30,14 +30,16 @@ test('both append different blocks at the end', () => {
   const base = 'task1';
   const mine = 'task1\nfrom-laptop';
   const theirs = 'task1\nfrom-phone';
-  // Trailing region differs on both sides -> conflict resolved by winner.
   assert.equal(
-    mergeThreeWay(base, mine, theirs, { conflictWinner: 'mine' }),
-    'task1\nfrom-laptop'
-  );
-  assert.equal(
-    mergeThreeWay(base, mine, theirs, { conflictWinner: 'theirs' }),
-    'task1\nfrom-phone'
+    mergeThreeWay(base, mine, theirs),
+    [
+      'task1',
+      '<<<<<<< ONELIST LOCAL',
+      'from-laptop',
+      '||||||| ONELIST REMOTE',
+      'from-phone',
+      '>>>>>>> ONELIST MERGE CONFLICT',
+    ].join('\n')
   );
 });
 
@@ -48,26 +50,41 @@ test('one side deletes a line, other side untouched', () => {
   assert.equal(mergeThreeWay(base, mine, theirs), 'a\nc');
 });
 
-test('divergent same-line edit resolves by recency', () => {
+test('divergent same-line edit preserves both sides despite recency', () => {
   const base = 'shared\nline\nend';
   const mine = 'shared\nLAPTOP\nend';
   const theirs = 'shared\nPHONE\nend';
+  const expected = [
+    'shared',
+    '<<<<<<< ONELIST LOCAL',
+    'LAPTOP',
+    '||||||| ONELIST REMOTE',
+    'PHONE',
+    '>>>>>>> ONELIST MERGE CONFLICT',
+    'end',
+  ].join('\n');
 
   assert.equal(
     mergeByRecency(base, mine, theirs, { mineUpdatedAt: 200, theirsUpdatedAt: 100 }),
-    'shared\nLAPTOP\nend'
+    expected
   );
   assert.equal(
     mergeByRecency(base, mine, theirs, { mineUpdatedAt: 100, theirsUpdatedAt: 200 }),
-    'shared\nPHONE\nend'
+    expected
   );
 });
 
-test('empty base merges independent first edits by winner', () => {
+test('empty base preserves independent first edits', () => {
   assert.equal(mergeThreeWay('', 'mine', 'mine'), 'mine');
   assert.equal(
-    mergeThreeWay('', 'mine', 'theirs', { conflictWinner: 'theirs' }),
-    'theirs'
+    mergeThreeWay('', 'mine', 'theirs'),
+    [
+      '<<<<<<< ONELIST LOCAL',
+      'mine',
+      '||||||| ONELIST REMOTE',
+      'theirs',
+      '>>>>>>> ONELIST MERGE CONFLICT',
+    ].join('\n')
   );
 });
 
@@ -87,26 +104,48 @@ test('interleaved edits separated by an anchor merge cleanly', () => {
   );
 });
 
-test('adjacent edits with no anchor between them conflict (newest wins)', () => {
+test('adjacent edits with no anchor between them preserve both sides', () => {
   // Real diff3 behavior: both sides change lines inside the same unstable
   // chunk, so the whole chunk is a conflict resolved by the winner.
   const base = 'h1\n- a\n- b\n- c\nfooter';
   const mine = 'h1\n- a\n- b2\n- c\nfooter';
   const theirs = 'h1\n- a0\n- b\n- c\nfooter';
   assert.equal(
-    mergeThreeWay(base, mine, theirs, { conflictWinner: 'theirs' }),
-    'h1\n- a0\n- b\n- c\nfooter'
+    mergeThreeWay(base, mine, theirs),
+    [
+      'h1',
+      '<<<<<<< ONELIST LOCAL',
+      '- a',
+      '- b2',
+      '||||||| ONELIST REMOTE',
+      '- a0',
+      '- b',
+      '>>>>>>> ONELIST MERGE CONFLICT',
+      '- c',
+      'footer',
+    ].join('\n')
   );
 });
 
 test('merge converges: after saving the merged result, re-sync is stable', () => {
   const base = 'a\nb';
-  const merged = mergeThreeWay(base, 'a\nb\nmine', 'a\nb\ntheirs', { conflictWinner: 'mine' });
-  assert.equal(merged, 'a\nb\nmine');
+  const merged = mergeThreeWay(base, 'a\nb\nmine', 'a\nb\ntheirs');
+  assert.equal(
+    merged,
+    [
+      'a',
+      'b',
+      '<<<<<<< ONELIST LOCAL',
+      'mine',
+      '||||||| ONELIST REMOTE',
+      'theirs',
+      '>>>>>>> ONELIST MERGE CONFLICT',
+    ].join('\n')
+  );
 
   // After the merge we persist `merged` to the server, so the next sync sees
   // base === theirs === merged. A fresh local edit must not duplicate content.
   const nextLocal = `${merged}\nmore`;
-  assert.equal(mergeThreeWay(merged, nextLocal, merged, { conflictWinner: 'mine' }), nextLocal);
-  assert.equal(mergeThreeWay(merged, merged, merged, { conflictWinner: 'mine' }), merged);
+  assert.equal(mergeThreeWay(merged, nextLocal, merged), nextLocal);
+  assert.equal(mergeThreeWay(merged, merged, merged), merged);
 });
