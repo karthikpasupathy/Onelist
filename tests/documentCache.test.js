@@ -29,6 +29,37 @@ test('writeDocumentCache persists content for a user/year', () => {
     docId: 'doc-1',
     content: '- two\n- three',
     updatedAt: 100,
+    baseContent: '- two\n- three',
+  });
+});
+
+test('writeDocumentCache stores a distinct merge base alongside the draft', () => {
+  writeDocumentCache('user-1', 2026, {
+    docId: 'doc-1',
+    content: 'draft text',
+    updatedAt: 100,
+    baseContent: 'saved text',
+  });
+
+  assert.deepEqual(readDocumentCache('user-1', 2026), {
+    docId: 'doc-1',
+    content: 'draft text',
+    updatedAt: 100,
+    baseContent: 'saved text',
+  });
+});
+
+test('readDocumentCache falls back to content for legacy caches without a base', () => {
+  storage.set(
+    'onelist_doc_cache_user-1_2026',
+    JSON.stringify({ docId: 'doc-1', content: 'legacy', updatedAt: 5 })
+  );
+
+  assert.deepEqual(readDocumentCache('user-1', 2026), {
+    docId: 'doc-1',
+    content: 'legacy',
+    updatedAt: 5,
+    baseContent: 'legacy',
   });
 });
 

@@ -7,6 +7,7 @@ import {
   shouldQueueBackupConflict,
   shouldRestoreDraftBackup,
 } from '../src/syncGuard.js';
+import { mergeByRecency } from '../src/textMerge.js';
 import { getDocuments, updateDocumentContent, upsertDocument } from '../src/localDevStore.js';
 
 const storage = new Map();
@@ -130,6 +131,69 @@ test('scenario: both devices edited — laptop has unsaved changes when phone sa
     true
   );
   assert.equal(hasUnsavedEditorChanges, true);
+});
+
+test('silent merge: disjoint edits from two devices combine without prompting', () => {
+  const base = '- groceries\n- gym\n- call mom\n- read';
+  seedLaptopSave(base, 1_000);
+
+  // Phone edits the "call mom" line and saves; laptop has an unsaved edit on
+  // the "groceries" line. The unchanged "gym"/"read" lines anchor the merge so
+  // both edits survive.
+  const phone = '- groceries\n- gym\n- call mom 6pm\n- read';
+  simulatePhoneSave(phone, 2_000);
+
+  const laptopEditor = '- groceries!\n- gym\n- call mom\n- read';
+  const server = getDocuments()[0];
+
+  const merged = mergeByRecency(base, laptopEditor, server.content, {
+    mineUpdatedAt: 2_500,
+    theirsUpdatedAt: server.updatedAt,
+  });
+
+  assert.equal(merged, '- groceries!\n- gym\n- call mom 6pm\n- read');
+});
+
+test('silent merge: appends from both devices keep the newest line on a true conflict', () => {
+  const base = 'shared base';
+  seedLaptopSave(base, 1_000);
+  simulatePhoneSave('shared base\nphone line', 2_000);
+
+  const laptopEditor = 'shared base\nlaptop line';
+  const server = getDocuments()[0];
+
+  // Laptop edited most recently -> laptop's line wins the trailing conflict.
+  assert.equal(
+    mergeByRecency(base, laptopEditor, server.content, {
+      mineUpdatedAt: 3_000,
+      theirsUpdatedAt: server.updatedAt,
+    }),
+    'shared base\nlaptop line'
+  );
+
+  // Phone save is newer than the local edit -> phone's line wins.
+  assert.equal(
+    mergeByRecency(base, laptopEditor, server.content, {
+      mineUpdatedAt: 1_500,
+      theirsUpdatedAt: server.updatedAt,
+    }),
+    'shared base\nphone line'
+  );
+});
+
+test('silent merge: re-running after the merged save is stable (no duplication)', () => {
+  const base = 'a\nb';
+  const merged = mergeByRecency(base, 'a\nb\nlaptop', 'a\nb\nphone', {
+    mineUpdatedAt: 3_000,
+    theirsUpdatedAt: 2_000,
+  });
+  assert.equal(merged, 'a\nb\nlaptop');
+
+  // After persisting `merged`, base and server both equal it.
+  assert.equal(
+    mergeByRecency(merged, merged, merged, { mineUpdatedAt: 4_000, theirsUpdatedAt: 4_000 }),
+    merged
+  );
 });
 
 test('scenario: crash recovery restores draft only for same server version', () => {

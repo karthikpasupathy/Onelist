@@ -15,17 +15,22 @@ export function readDocumentCache(userId, year) {
     if (!parsed || typeof parsed !== 'object') return null;
     if (!parsed.docId) return null;
 
+    const content = typeof parsed.content === 'string' ? parsed.content : '';
+
     return {
       docId: parsed.docId,
-      content: typeof parsed.content === 'string' ? parsed.content : '',
+      content,
       updatedAt: Number.isFinite(parsed.updatedAt) ? parsed.updatedAt : 0,
+      // Last server-confirmed content (merge ancestor). Falls back to `content`
+      // for caches written before base tracking existed.
+      baseContent: typeof parsed.baseContent === 'string' ? parsed.baseContent : content,
     };
   } catch {
     return null;
   }
 }
 
-export function writeDocumentCache(userId, year, { docId, content, updatedAt }) {
+export function writeDocumentCache(userId, year, { docId, content, updatedAt, baseContent }) {
   if (!userId || !docId || !Number.isInteger(year)) return;
 
   try {
@@ -35,6 +40,7 @@ export function writeDocumentCache(userId, year, { docId, content, updatedAt }) 
         docId,
         content: content ?? '',
         updatedAt: updatedAt || Date.now(),
+        baseContent: typeof baseContent === 'string' ? baseContent : (content ?? ''),
       })
     );
   } catch (err) {

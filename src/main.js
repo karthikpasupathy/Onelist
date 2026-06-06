@@ -36,6 +36,7 @@ import {
   shouldQueueBackupConflict,
   shouldRestoreDraftBackup,
 } from './syncGuard.js';
+import { mergeByRecency } from './textMerge.js';
 
 // Read InstantDB App ID from environment variable
 // Users must set VITE_INSTANT_APP_ID in their Vercel environment variables
@@ -75,7 +76,6 @@ const $results = document.getElementById('search-results');
 const $yearSelect = document.getElementById('year-select');
 const $snapshotsModal = document.getElementById('snapshots-modal');
 const $btnSearchModal = document.getElementById('btn-search-modal');
-const $btnSyncConflict = document.getElementById('btn-sync-conflict');
 const $saveIndicator = document.getElementById('save-indicator');
 const $btnAppendDate = document.getElementById('btn-append-date');
 const $searchModal = document.getElementById('search-modal');
@@ -124,7 +124,6 @@ const $updateBanner = document.getElementById('update-banner');
 const $updateBannerIcon = document.getElementById('update-banner-icon');
 const $updateBannerTitle = document.getElementById('update-banner-title');
 const $updateBannerMessage = document.getElementById('update-banner-message');
-const $btnUpdateAux = document.getElementById('btn-update-aux');
 const $btnUpdateDismiss = document.getElementById('btn-update-dismiss');
 const $btnUpdateRefresh = document.getElementById('btn-update-refresh');
 const $appVersion = document.getElementById('app-version');
@@ -136,6 +135,12 @@ let currentSearchScope = 'current';
 let saveTimer = null;
 let lastSaveStatus = 'saved';
 let localUpdatedAt = 0;
+// Last server-confirmed content for the open doc; the common ancestor used as
+// the base for silent three-way merges across devices.
+let baseContent = '';
+// Wall-clock time of the most recent local keystroke, used as the "mine" side
+// recency when resolving a true line-level conflict (newest wins).
+let lastLocalEditAt = 0;
 let isSwitchingYear = false;
 let hasMigratedLegacyDoc = false;
 const documentsByYear = new Map();
@@ -157,9 +162,6 @@ let newYearResolver = null;
 let snippetCache = [];
 let hasPendingAppUpdate = false;
 let isApplyingAppUpdate = false;
-let activeBannerMode = 'none';
-let pendingRemoteConflict = null;
-let isResolvingRemoteConflict = false;
 let hasCompletedInitialDocumentBootstrap = false;
 let initialDocumentBootstrapPromise = null;
 
@@ -196,14 +198,6 @@ const saveCoordinator = createSaveCoordinator({
       return { skipped: true };
     }
 
-    if (
-      pendingRemoteConflict?.docId === currentDocId &&
-      pendingRemoteConflict?.year === currentYear &&
-      !isResolvingRemoteConflict
-    ) {
-      return { skipped: true, status: 'conflict' };
-    }
-
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       return { skipped: true, status: 'offline' };
     }
@@ -212,24 +206,33 @@ const saveCoordinator = createSaveCoordinator({
     const year = currentYear;
     const now = Date.now();
 
-    if (!isResolvingRemoteConflict) {
-      const serverDoc = await fetchServerDocument(docId);
-      if (
-        serverDoc &&
-        shouldBlockSaveOverRemote({
-          localUpdatedAt,
-          localContent: content,
-          serverUpdatedAt: serverDoc.updatedAt || 0,
-          serverContent: serverDoc.content || '',
-        })
-      ) {
-        documentsByYear.set(year, serverDoc);
+    let contentToSave = content;
 
-        if (hasUnsavedEditorChanges()) {
-          queueRemoteConflict(serverDoc);
-          return { skipped: true, status: 'conflict' };
-        }
+    const serverDoc = await fetchServerDocument(docId);
+    if (
+      serverDoc &&
+      shouldBlockSaveOverRemote({
+        localUpdatedAt,
+        localContent: content,
+        serverUpdatedAt: serverDoc.updatedAt || 0,
+        serverContent: serverDoc.content || '',
+      })
+    ) {
+      documentsByYear.set(year, serverDoc);
+      const serverContent = serverDoc.content || '';
+      const serverUpdatedAt = serverDoc.updatedAt || 0;
 
+      if (hasUnsavedEditorChanges()) {
+        // Both sides changed: merge silently and persist the reconciled text.
+        const merged = mergeByRecency(baseContent, $editor.value, serverContent, {
+          mineUpdatedAt: lastLocalEditAt || now,
+          theirsUpdatedAt: serverUpdatedAt,
+        });
+        applyMergedContent(merged);
+        contentToSave = merged;
+        console.log('[Sync] Auto-merged remote changes into local edits');
+      } else {
+        // No local edits to protect: take the newer remote version.
         hydrateEditorFromDocument(serverDoc, {
           allowConflict: false,
           allowBackupRestore: false,
@@ -239,11 +242,11 @@ const saveCoordinator = createSaveCoordinator({
     }
 
     if (isDevBypass) {
-      updateLocalDocumentContent(docId, content, now);
+      updateLocalDocumentContent(docId, contentToSave, now);
     } else {
       await db.transact([
         tx.documents[docId].update({
-          content,
+          content: contentToSave,
           updatedAt: now,
         }),
       ]);
@@ -253,17 +256,17 @@ const saveCoordinator = createSaveCoordinator({
     if (currentDoc?.id === docId) {
       documentsByYear.set(year, {
         ...currentDoc,
-        content,
+        content: contentToSave,
         updatedAt: now,
       });
     }
 
     localUpdatedAt = now;
-    syncDocumentCache(content);
-    clearResolvedRemoteConflict({ docId, year, resolvedAt: now, content });
+    baseContent = contentToSave;
+    syncDocumentCache(contentToSave);
     clearBackupForDocument(docId);
     console.log(`[Sync] Saved to server (${new Date(now).toISOString()})`);
-    await saveSnapshot(content, year);
+    await saveSnapshot(contentToSave, year);
     return { updatedAt: now };
   },
 });
@@ -302,13 +305,13 @@ function deactivateUserSession() {
   clearSnippetCache();
   clearSaveTimer();
   saveCoordinator.reset('');
-  clearPendingRemoteConflict();
-  hideUpdateBanner({ preserveConflict: false });
+  hideUpdateBanner();
   currentYear = getStoredYear();
   hasMigratedLegacyDoc = false;
   hasCompletedInitialDocumentBootstrap = false;
   initialDocumentBootstrapPromise = null;
   localUpdatedAt = 0;
+  baseContent = '';
   setEditorBootstrapping(false);
   if ($editor) {
     $editor.value = '';
@@ -352,6 +355,7 @@ function applyCachedDocumentForStartup(userId) {
 
   currentDocId = cached.docId;
   localUpdatedAt = cached.updatedAt;
+  baseContent = cached.baseContent;
   $editor.value = cached.content;
   saveCoordinator.reset(cached.content);
   updateLineCounter();
@@ -367,6 +371,7 @@ function syncDocumentCache(content = $editor.value) {
     docId: currentDocId,
     content,
     updatedAt: localUpdatedAt,
+    baseContent,
   });
 }
 
@@ -838,20 +843,18 @@ function loadYearDocument(year) {
   hydrateEditorFromDocument(doc);
 }
 
-function hydrateEditorFromDocument(doc, { allowConflict = true, allowBackupRestore = true, force = false } = {}) {
+function hydrateEditorFromDocument(doc, { allowConflict = true, allowBackupRestore = true } = {}) {
   if (!doc) return;
-
-  if (pendingRemoteConflict?.docId === doc.id && pendingRemoteConflict?.year === doc.year && force) {
-    clearPendingRemoteConflict();
-  }
 
   const backupContent = localStorage.getItem(`onelist_backup_${doc.id}`);
   const backupTimeStr = localStorage.getItem(`onelist_backup_time_${doc.id}`);
   const serverUpdatedAt = doc.updatedAt || 0;
   const incomingContent = doc.content || '';
 
-  if (allowConflict && shouldQueueRemoteConflict(doc, incomingContent, serverUpdatedAt)) {
-    queueRemoteConflict(doc);
+  // Local edits diverged from a newer remote version: merge silently and
+  // persist the reconciled text so every device converges without a prompt.
+  if (allowConflict && shouldMergeRemoteChanges(doc, incomingContent, serverUpdatedAt)) {
+    mergeRemoteIntoEditor($editor.value, incomingContent, serverUpdatedAt, lastLocalEditAt);
     setEditorBootstrapping(false);
     return;
   }
@@ -874,6 +877,8 @@ function hydrateEditorFromDocument(doc, { allowConflict = true, allowBackupResto
       saveCoordinator.markDirty(backupContent);
       updateLineCounter();
       editorHistory.clear();
+      localUpdatedAt = serverUpdatedAt;
+      baseContent = incomingContent;
       syncDocumentCache(backupContent);
       scheduleSave();
       setEditorBootstrapping(false);
@@ -889,7 +894,8 @@ function hydrateEditorFromDocument(doc, { allowConflict = true, allowBackupResto
         localUpdatedAt,
       })
     ) {
-      queueRemoteConflict(doc);
+      // Crash-recovery draft collides with a newer server version: merge them.
+      mergeRemoteIntoEditor(backupContent, incomingContent, serverUpdatedAt, backupTime);
       setEditorBootstrapping(false);
       return;
     }
@@ -915,6 +921,7 @@ function hydrateEditorFromDocument(doc, { allowConflict = true, allowBackupResto
   }
 
   localUpdatedAt = serverUpdatedAt;
+  baseContent = incomingContent;
   lastSnapshotTime = 0;
   syncSaveTracking();
   updateLineCounter();
@@ -924,7 +931,7 @@ function hydrateEditorFromDocument(doc, { allowConflict = true, allowBackupResto
   console.log(`[Sync] Loaded year ${doc.year} (${new Date(serverUpdatedAt || Date.now()).toISOString()})`);
 }
 
-function shouldQueueRemoteConflict(doc, incomingContent, serverUpdatedAt) {
+function shouldMergeRemoteChanges(doc, incomingContent, serverUpdatedAt) {
   if (!currentDocId || doc.id !== currentDocId) return false;
   if (serverUpdatedAt <= localUpdatedAt) return false;
   if (!hasUnsavedEditorChanges()) return false;
@@ -932,40 +939,42 @@ function shouldQueueRemoteConflict(doc, incomingContent, serverUpdatedAt) {
   return true;
 }
 
-function queueRemoteConflict(doc) {
-  if (
-    pendingRemoteConflict?.docId === doc.id &&
-    pendingRemoteConflict?.year === doc.year &&
-    pendingRemoteConflict?.updatedAt === (doc.updatedAt || 0)
-  ) {
+// Reconcile a local version (`mineContent`) with a newer remote version
+// (`serverContent`) via three-way merge against the shared ancestor, show the
+// result, and schedule a save so the merged text propagates to other devices.
+function mergeRemoteIntoEditor(mineContent, serverContent, serverUpdatedAt, mineUpdatedAt) {
+  const merged = mergeByRecency(baseContent, mineContent, serverContent, {
+    mineUpdatedAt: mineUpdatedAt || Date.now(),
+    theirsUpdatedAt: serverUpdatedAt,
+  });
+
+  applyMergedContent(merged);
+  localUpdatedAt = serverUpdatedAt;
+  baseContent = serverContent;
+  lastSnapshotTime = 0;
+  editorHistory.clear();
+
+  if (merged === serverContent) {
+    clearBackupForDocument(currentDocId);
+    syncSaveTracking();
+    syncDocumentCache(merged);
     return;
   }
 
-  clearSaveTimer();
-  pendingRemoteConflict = {
-    docId: doc.id,
-    year: doc.year,
-    content: doc.content || '',
-    updatedAt: doc.updatedAt || 0,
-  };
-  updateSaveIndicator('conflict');
-  showRemoteConflictBanner();
+  syncDocumentCache(merged);
+  scheduleSave();
+  console.log('[Sync] Auto-merged remote changes into local edits');
 }
 
-function clearPendingRemoteConflict() {
-  pendingRemoteConflict = null;
-  if (activeBannerMode === 'remote-conflict') {
-    hideUpdateBanner({ preserveConflict: false });
-  }
-}
+function applyMergedContent(merged) {
+  if ($editor.value === merged) return;
 
-function clearResolvedRemoteConflict({ docId, year, resolvedAt, content }) {
-  if (!pendingRemoteConflict) return;
-  if (pendingRemoteConflict.docId !== docId || pendingRemoteConflict.year !== year) return;
-  if (resolvedAt < pendingRemoteConflict.updatedAt) return;
-  if (typeof content === 'string' && content !== $editor.value) return;
-  clearPendingRemoteConflict();
-  clearBackupForDocument(docId);
+  const cursorPos = $editor.selectionStart;
+  editorHistory.beforeEdit($editor);
+  $editor.value = merged;
+  const clamped = Math.min(cursorPos, merged.length);
+  $editor.selectionStart = $editor.selectionEnd = clamped;
+  updateLineCounter();
 }
 
 function clearBackupForDocument(docId) {
@@ -1263,14 +1272,6 @@ $btnHelpMenu.addEventListener('click', () => {
 
 // Search modal
 $btnSearchModal.addEventListener('click', openSearchModal);
-
-$saveIndicator?.addEventListener('click', () => {
-  if (lastSaveStatus === 'conflict') {
-    openRemoteConflictDialog();
-  }
-});
-
-$btnSyncConflict?.addEventListener('click', openRemoteConflictDialog);
 
 $btnAppendDate.addEventListener('mousedown', (e) => {
   e.preventDefault();
@@ -1595,12 +1596,6 @@ async function persistContent(isForced = false) {
 async function ensureCurrentDocumentIsSafe(nextActionLabel = 'continue') {
   clearSaveTimer();
   await persistContent(true);
-
-  if (pendingRemoteConflict?.docId === currentDocId) {
-    showRemoteConflictBanner();
-    showToast(`Resolve the newer version from another device before you ${nextActionLabel}.`, { type: 'error' });
-    return false;
-  }
 
   if (hasUnsavedEditorChanges()) {
     showToast(`We could not save your latest changes yet. Please try again before you ${nextActionLabel}.`, { type: 'error' });
@@ -2087,6 +2082,8 @@ $editor.addEventListener('beforeinput', (e) => {
 });
 
 $editor.addEventListener('input', () => {
+  lastLocalEditAt = Date.now();
+
   if (tryExpandSlashOnSpace()) {
     hideSlashMenu();
   } else {
@@ -2257,10 +2254,6 @@ window.addEventListener('online', () => {
   console.log('[OneList] Back online - syncing...');
   refreshRemoteDocumentIfNeeded()
     .then(() => {
-      if (pendingRemoteConflict?.docId === currentDocId) {
-        showRemoteConflictBanner();
-        return;
-      }
       if (currentDocId && currentUser && hasUnsavedEditorChanges()) {
         persistContent(true).catch(handleSaveError);
       }
@@ -2278,37 +2271,12 @@ window.addEventListener('offline', () => {
   console.log('[OneList] Offline - edits stay on this device until you reconnect');
 });
 
-window.addEventListener('resize', () => {
-  if (pendingRemoteConflict?.docId === currentDocId) {
-    setSyncConflictToolbarVisible(true);
-  }
-});
-
 // Update save indicator in UI
-function isMobileSyncConflictLayout() {
-  return typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches;
-}
-
-function setSyncConflictToolbarVisible(visible) {
-  if (!$btnSyncConflict) return;
-  const showToolbar = visible && isMobileSyncConflictLayout();
-  $btnSyncConflict.hidden = !showToolbar;
-  if (showToolbar && typeof lucide !== 'undefined') {
-    setTimeout(() => lucide.createIcons(), 0);
-  }
-}
-
-function openRemoteConflictDialog() {
-  if (!pendingRemoteConflict || pendingRemoteConflict.docId !== currentDocId) return;
-  showRemoteConflictBanner();
-}
-
 function updateSaveIndicator(status) {
   lastSaveStatus = status;
   const indicator = $saveIndicator;
   if (!indicator) return;
 
-  setSyncConflictToolbarVisible(false);
   indicator.disabled = true;
   indicator.removeAttribute('aria-label');
 
@@ -2338,23 +2306,10 @@ function updateSaveIndicator(status) {
       indicator.className = 'save-indicator error';
       indicator.hidden = false;
       break;
-    case 'conflict':
-      indicator.textContent = 'Remote update';
-      indicator.className = 'save-indicator conflict';
-      indicator.hidden = false;
-      indicator.disabled = false;
-      indicator.setAttribute('aria-label', 'Remote update — click to resolve');
-      setSyncConflictToolbarVisible(true);
-      break;
   }
 }
 
 function refreshSaveIndicator() {
-  if (pendingRemoteConflict?.docId === currentDocId) {
-    updateSaveIndicator('conflict');
-    return;
-  }
-
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
     updateSaveIndicator('offline');
     return;
@@ -2697,27 +2652,12 @@ $btnSaveSettings.addEventListener('click', () => {
   closeModal($settingsModal);
 });
 
-$btnUpdateAux?.addEventListener('click', async () => {
-  if (activeBannerMode !== 'remote-conflict') return;
-  await keepLocalVersion();
-});
-
 $btnUpdateDismiss?.addEventListener('click', () => {
   if (isApplyingAppUpdate) return;
-  if (activeBannerMode === 'remote-conflict') {
-    hideUpdateBanner();
-    refreshSaveIndicator();
-    return;
-  }
   hideUpdateBanner();
 });
 
 $btnUpdateRefresh?.addEventListener('click', async () => {
-  if (activeBannerMode === 'remote-conflict') {
-    loadRemoteVersion();
-    return;
-  }
-
   if (!hasPendingAppUpdate || isApplyingAppUpdate) return;
 
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
@@ -2828,61 +2768,23 @@ function forceReloadToLatestVersion() {
 }
 
 function showUpdateBanner(message) {
-  if (pendingRemoteConflict?.docId === currentDocId) return;
   showBanner({
-    mode: 'app-update',
     title: 'New version available',
     message,
-    dismissLabel: 'Dismiss',
     refreshLabel: isApplyingAppUpdate ? 'Refreshing...' : 'Refresh',
   });
 }
 
-function hideUpdateBanner({ preserveConflict = true } = {}) {
+function hideUpdateBanner() {
   if (!$updateBanner) return;
-  activeBannerMode = 'none';
   $updateBanner.setAttribute('aria-hidden', 'true');
-  $updateBanner.classList.remove('conflict');
-
-  if (!preserveConflict && hasPendingAppUpdate && !pendingRemoteConflict) {
-    showUpdateBanner('Update is ready. Refresh when you are ready.');
-  }
 }
 
-function showRemoteConflictBanner() {
-  if (!pendingRemoteConflict || pendingRemoteConflict.docId !== currentDocId) return;
-
-  const conflictDate = new Date(pendingRemoteConflict.updatedAt || Date.now()).toLocaleString(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  });
-  showBanner({
-    mode: 'remote-conflict',
-    title: 'Newer version found',
-    message: `Another device saved changes on ${conflictDate}. Choose which version to keep.`,
-    auxLabel: 'Keep mine',
-    dismissLabel: 'Compare later',
-    refreshLabel: 'Load theirs',
-    conflict: true,
-  });
-}
-
-function showBanner({ mode, title, message, auxLabel = '', dismissLabel, refreshLabel, conflict = false }) {
+function showBanner({ title, message, refreshLabel }) {
   if (!$updateBanner) return;
 
-  activeBannerMode = mode;
-  $updateBanner.classList.toggle('conflict', conflict);
-  if ($updateBanner) {
-    if (conflict) {
-      $updateBanner.setAttribute('role', 'alertdialog');
-      $updateBanner.setAttribute('aria-modal', 'false');
-    } else {
-      $updateBanner.removeAttribute('role');
-      $updateBanner.removeAttribute('aria-modal');
-    }
-  }
   if ($updateBannerIcon) {
-    $updateBannerIcon.hidden = !conflict;
+    $updateBannerIcon.hidden = true;
   }
   if ($updateBannerTitle) {
     $updateBannerTitle.textContent = title;
@@ -2891,18 +2793,8 @@ function showBanner({ mode, title, message, auxLabel = '', dismissLabel, refresh
     $updateBannerMessage.textContent = message;
   }
 
-  if ($btnUpdateAux) {
-    if (auxLabel) {
-      $btnUpdateAux.hidden = false;
-      $btnUpdateAux.textContent = auxLabel;
-    } else {
-      $btnUpdateAux.hidden = true;
-    }
-    $btnUpdateAux.disabled = false;
-  }
-
   if ($btnUpdateDismiss) {
-    $btnUpdateDismiss.textContent = dismissLabel;
+    $btnUpdateDismiss.textContent = 'Dismiss';
     $btnUpdateDismiss.disabled = false;
   }
 
@@ -2916,63 +2808,6 @@ function showBanner({ mode, title, message, auxLabel = '', dismissLabel, refresh
   if (typeof lucide !== 'undefined') {
     setTimeout(() => lucide.createIcons(), 0);
   }
-}
-
-async function keepLocalVersion() {
-  if (!pendingRemoteConflict || pendingRemoteConflict.docId !== currentDocId) return;
-  if (typeof navigator !== 'undefined' && !navigator.onLine) {
-    showRemoteConflictBanner();
-    if ($updateBannerMessage) {
-      $updateBannerMessage.textContent = 'Reconnect first, then choose Keep mine to save your version.';
-    }
-    return;
-  }
-
-  isResolvingRemoteConflict = true;
-  try {
-    showBanner({
-      mode: 'remote-conflict',
-      title: 'Saving your version',
-      message: 'Saving your current text so it becomes the latest version...',
-      auxLabel: '',
-      dismissLabel: 'Working...',
-      refreshLabel: 'Working...',
-      conflict: true,
-    });
-    if ($btnUpdateDismiss) $btnUpdateDismiss.disabled = true;
-    if ($btnUpdateRefresh) $btnUpdateRefresh.disabled = true;
-
-    await persistContent(true);
-
-    if (pendingRemoteConflict?.docId === currentDocId) {
-      showRemoteConflictBanner();
-      if ($updateBannerMessage) {
-        $updateBannerMessage.textContent = 'We could not save your version yet. Try again in a moment.';
-      }
-      return;
-    }
-
-    hideUpdateBanner({ preserveConflict: false });
-    refreshSaveIndicator();
-  } finally {
-    isResolvingRemoteConflict = false;
-  }
-}
-
-function loadRemoteVersion() {
-  if (!pendingRemoteConflict || pendingRemoteConflict.docId !== currentDocId) return;
-
-  const remoteDoc = documentsByYear.get(pendingRemoteConflict.year);
-  if (!remoteDoc) return;
-
-  hydrateEditorFromDocument(remoteDoc, {
-    allowConflict: false,
-    allowBackupRestore: false,
-    force: true,
-  });
-  clearBackupForDocument(remoteDoc.id);
-  hideUpdateBanner({ preserveConflict: false });
-  refreshSaveIndicator();
 }
 
 function clearSnippetCache() {

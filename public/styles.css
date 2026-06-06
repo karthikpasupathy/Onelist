@@ -302,39 +302,6 @@ button:active {
   background: rgba(212, 91, 75, 0.12);
 }
 
-.save-indicator.conflict {
-  color: #a85a17;
-  background: rgba(223, 145, 39, 0.16);
-}
-
-.save-indicator.conflict:not(:disabled) {
-  cursor: pointer;
-}
-
-.save-indicator.conflict:not(:disabled):hover,
-.save-indicator.conflict:not(:disabled):focus-visible {
-  background: rgba(223, 145, 39, 0.28);
-  outline: 2px solid rgba(223, 145, 39, 0.35);
-  outline-offset: 2px;
-}
-
-.sync-conflict-btn {
-  color: #a85a17;
-}
-
-.sync-conflict-btn:not([hidden]) {
-  background: rgba(223, 145, 39, 0.16);
-}
-
-.sync-conflict-btn:not([hidden]):hover,
-.sync-conflict-btn:not([hidden]):focus-visible {
-  background: rgba(223, 145, 39, 0.28);
-}
-
-#btn-sync-conflict {
-  display: none;
-}
-
 .update-banner {
   position: fixed;
   right: 24px;
@@ -376,39 +343,12 @@ button:active {
   color: #a85a17;
 }
 
-.update-banner.conflict {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 16px;
-  width: min(420px, calc(100vw - 28px));
-  padding: 20px;
-  border-color: rgba(223, 145, 39, 0.32);
-  background: rgba(255, 247, 232, 0.98);
-}
-
-.update-banner.conflict .update-banner-body {
-  min-width: 0;
-}
-
-.update-banner.conflict .update-banner-icon {
-  display: inline-flex;
-}
-
-.update-banner.conflict .update-banner-icon[hidden] {
-  display: none;
-}
-
 .update-banner-copy {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
   gap: 6px;
   min-width: 140px;
-}
-
-.update-banner.conflict .update-banner-copy {
-  flex: 1 1 auto;
-  min-width: 0;
 }
 
 .update-banner-copy strong {
@@ -426,10 +366,6 @@ button:active {
   line-height: 1.5;
 }
 
-.update-banner.conflict .update-banner-copy span {
-  color: #6f6355;
-}
-
 .update-banner-actions {
   display: flex;
   flex: 0 0 auto;
@@ -439,26 +375,12 @@ button:active {
   gap: 8px;
 }
 
-.update-banner.conflict .update-banner-actions {
-  padding-top: 0;
-}
-
 .update-banner-btn {
   min-height: 40px;
   padding: 10px 16px;
   border-radius: 999px;
   font-size: 0.9rem;
   white-space: nowrap;
-}
-
-.update-banner.conflict .update-banner-btn {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.update-banner.conflict .btn-primary.update-banner-btn {
-  flex: 1.2 1 auto;
-  font-weight: 650;
 }
 
 @keyframes pulse {
@@ -1228,14 +1150,6 @@ div[style*="z-index: 2147483647"] {
     margin-left: 2px;
   }
 
-  .save-indicator.conflict {
-    display: none !important;
-  }
-
-  #btn-sync-conflict:not([hidden]) {
-    display: inline-flex;
-  }
-
   .save-indicator::after {
     content: '';
     display: block;
@@ -1258,17 +1172,8 @@ div[style*="z-index: 2147483647"] {
     align-items: stretch;
   }
 
-  .update-banner:not(.conflict) .update-banner-actions {
+  .update-banner-actions {
     justify-content: flex-end;
-  }
-
-  .update-banner.conflict .update-banner-actions {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .update-banner.conflict .update-banner-btn {
-    width: 100%;
   }
 
   .year-select-wrap {
