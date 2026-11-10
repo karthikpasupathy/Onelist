@@ -39,6 +39,20 @@ npx instant-cli@latest push schema
 npx instant-cli@latest push perms
 ```
 
+#### Upgrading an existing app to versioned saves
+
+Documents gained `rev` / `prevRev` attributes and a permission rule that
+rejects saves based on a stale revision. For an app that already has data, roll
+it out in this order:
+
+1. `npx instant-cli@latest push schema` - adds the two optional attributes.
+   Until this is done the app detects the rejection and falls back to
+   unversioned saves.
+2. Deploy the new build and reload it on every device.
+3. `npx instant-cli@latest push perms` - turns on server-side enforcement.
+   Builds from before this change do not write `rev`, so their saves are
+   refused once this is live.
+
 ### 4. Run the Development Server
 ```bash
 npm run dev

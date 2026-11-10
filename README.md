@@ -50,19 +50,36 @@ Alternatively, you can:
 ## Sync Model
 
 OneList is optimized for one user syncing a personal text file across devices.
-InstantDB remains the realtime backend, while the browser keeps the current
-draft, merge base, and dirty state in IndexedDB so offline edits can be
-reconciled after reconnect.
+The browser keeps the current draft, its merge base and its dirty state in
+IndexedDB, so offline edits can be reconciled after reconnect.
+
+Every document has a revision counter (`rev`). A save names the revision it was
+based on and only succeeds if the server is still at that revision
+(compare-and-swap). If another device saved first, the app pulls that copy,
+three-way merges it with the local text, and retries. Decisions never depend on
+comparing clocks between devices.
 
 When two devices edit different line regions, OneList merges them silently.
 When both devices edit the same unstable region, the app keeps both versions in
 a visible `ONELIST MERGE CONFLICT` block instead of silently choosing a winner.
 
+## Code Layout
+
+- `src/main.js` - session lifecycle and editor event wiring
+- `src/documentSync.js` - save, merge and draft logic for the open document
+- `src/syncGuard.js`, `src/textMerge.js` - pure sync decisions and the merge
+- `src/store/` - the storage backend. `instantStore.js` is the only file that
+  imports InstantDB; `localStore.js` is the browser-only dev backend. A new
+  backend implements the same interface and is selected in `store/index.js`.
+- `src/snapshots.js`, `src/snippets.js`, `src/search.js`, `src/yearSwitcher.js`,
+  `src/editorCommands.js`, `src/textFormatting.js`, `src/appUpdate.js`,
+  `src/authUi.js`, `src/modals.js` - one feature each
+
 ## InstantDB Schema
 
 Schema and permissions live in `instant.schema.ts` and `instant.perms.ts`.
 
-- `documents`: `{ userId, docKey, year, content, createdAt, updatedAt }`
+- `documents`: `{ userId, docKey, year, content, createdAt, updatedAt, rev, prevRev }`
 - `snapshots`: `{ userId, year, content, createdAt, pinned }`
 - `snippets`: `{ userId, name, content, createdAt, updatedAt }`
 - `settings`: `{ userId, ... }`

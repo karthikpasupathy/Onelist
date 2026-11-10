@@ -51,6 +51,11 @@ export function upsertDocument(doc) {
   return documents[index >= 0 ? index : documents.length - 1];
 }
 
+function revOf(doc) {
+  return Number.isInteger(doc?.rev) ? doc.rev : 0;
+}
+
+// Unconditional write, as an older client or another device would do it.
 export function updateDocumentContent(docId, content, updatedAt) {
   const documents = getDocuments();
   const doc = documents.find((entry) => entry.id === docId);
@@ -58,8 +63,27 @@ export function updateDocumentContent(docId, content, updatedAt) {
 
   doc.content = content;
   doc.updatedAt = updatedAt;
+  doc.rev = revOf(doc) + 1;
   writeCollection(STORAGE_KEYS.documents, documents);
   return doc;
+}
+
+// Compare-and-swap write: only succeeds if the stored document is still at the
+// revision the caller's text was based on.
+export function saveDocumentContent({ docId, content, updatedAt, baseRev }) {
+  const documents = getDocuments();
+  const doc = documents.find((entry) => entry.id === docId);
+  if (!doc) throw new Error(`Document ${docId} does not exist`);
+
+  if (revOf(doc) !== baseRev) {
+    return { status: 'conflict', doc };
+  }
+
+  doc.content = content;
+  doc.updatedAt = updatedAt;
+  doc.rev = baseRev + 1;
+  writeCollection(STORAGE_KEYS.documents, documents);
+  return { status: 'saved', rev: doc.rev };
 }
 
 export function getSnapshots(userId) {

@@ -28,42 +28,138 @@ function formatConflictBlock(mineSlice, theirsSlice) {
   ];
 }
 
-// Longest common subsequence between two line arrays, returned as matched
-// index pairs [aIndex, bIndex] in increasing order.
-function lcsPairs(a, b) {
-  const n = a.length;
-  const m = b.length;
-  const dp = [];
-  for (let i = 0; i <= n; i++) {
-    dp.push(new Uint32Array(m + 1));
-  }
+// Largest dynamic-programming table (rows x columns) the exact LCS may build.
+// 4M Uint16 cells is about 8 MB; anything bigger goes through the anchor-based
+// path below so a long file can never exhaust memory on a phone.
+const MAX_LCS_CELLS = 4_000_000;
+
+// Exact LCS over the sub-ranges a[aStart, aEnd) and b[bStart, bEnd).
+function lcsPairsExact(a, aStart, aEnd, b, bStart, bEnd, pairs) {
+  const n = aEnd - aStart;
+  const m = bEnd - bStart;
+  const width = m + 1;
+  const dp = new Uint16Array((n + 1) * width);
 
   for (let i = n - 1; i >= 0; i--) {
-    const row = dp[i];
-    const next = dp[i + 1];
+    const row = i * width;
+    const next = row + width;
     for (let j = m - 1; j >= 0; j--) {
-      if (a[i] === b[j]) {
-        row[j] = next[j + 1] + 1;
+      if (a[aStart + i] === b[bStart + j]) {
+        dp[row + j] = dp[next + j + 1] + 1;
       } else {
-        row[j] = next[j] >= row[j + 1] ? next[j] : row[j + 1];
+        dp[row + j] = dp[next + j] >= dp[row + j + 1] ? dp[next + j] : dp[row + j + 1];
       }
     }
   }
 
-  const pairs = [];
   let i = 0;
   let j = 0;
   while (i < n && j < m) {
-    if (a[i] === b[j]) {
-      pairs.push([i, j]);
+    if (a[aStart + i] === b[bStart + j]) {
+      pairs.push([aStart + i, bStart + j]);
       i++;
       j++;
-    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+    } else if (dp[(i + 1) * width + j] >= dp[i * width + j + 1]) {
       i++;
     } else {
       j++;
     }
   }
+}
+
+// Lines that occur exactly once in each range, matched up and reduced to the
+// longest run that keeps its order in both (patience diff). Linear memory.
+function uniqueLineAnchors(a, aStart, aEnd, b, bStart, bEnd) {
+  const seenInA = new Map();
+  for (let i = aStart; i < aEnd; i++) {
+    seenInA.set(a[i], seenInA.has(a[i]) ? -1 : i);
+  }
+  const seenInB = new Map();
+  for (let j = bStart; j < bEnd; j++) {
+    seenInB.set(b[j], seenInB.has(b[j]) ? -1 : j);
+  }
+
+  // Candidate matches ordered by position in `a`.
+  const candidates = [];
+  for (let i = aStart; i < aEnd; i++) {
+    if (seenInA.get(a[i]) !== i) continue;
+    const j = seenInB.get(a[i]);
+    if (j === undefined || j === -1) continue;
+    candidates.push([i, j]);
+  }
+
+  // Longest increasing subsequence on the `b` position.
+  const tails = [];
+  const previous = new Int32Array(candidates.length).fill(-1);
+  for (let k = 0; k < candidates.length; k++) {
+    const target = candidates[k][1];
+    let lo = 0;
+    let hi = tails.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (candidates[tails[mid]][1] < target) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo > 0) previous[k] = tails[lo - 1];
+    tails[lo] = k;
+  }
+
+  const anchors = [];
+  for (let k = tails.length ? tails[tails.length - 1] : -1; k !== -1; k = previous[k]) {
+    anchors.push(candidates[k]);
+  }
+  return anchors.reverse();
+}
+
+function lcsPairsInRange(a, aStart, aEnd, b, bStart, bEnd, pairs) {
+  // Lines shared at the start and end of the range match trivially.
+  while (aStart < aEnd && bStart < bEnd && a[aStart] === b[bStart]) {
+    pairs.push([aStart, bStart]);
+    aStart++;
+    bStart++;
+  }
+  const suffix = [];
+  while (aStart < aEnd && bStart < bEnd && a[aEnd - 1] === b[bEnd - 1]) {
+    aEnd--;
+    bEnd--;
+    suffix.push([aEnd, bEnd]);
+  }
+
+  const n = aEnd - aStart;
+  const m = bEnd - bStart;
+
+  if (n > 0 && m > 0) {
+    if ((n + 1) * (m + 1) <= MAX_LCS_CELLS && Math.min(n, m) < 65535) {
+      lcsPairsExact(a, aStart, aEnd, b, bStart, bEnd, pairs);
+    } else {
+      // Too big for an exact table: split around unique lines and solve the
+      // gaps between them. A gap with no unique line is treated as changed,
+      // which can only make the merge more cautious, never lossy.
+      const anchors = uniqueLineAnchors(a, aStart, aEnd, b, bStart, bEnd);
+      let prevA = aStart;
+      let prevB = bStart;
+      for (const [anchorA, anchorB] of anchors) {
+        lcsPairsInRange(a, prevA, anchorA, b, prevB, anchorB, pairs);
+        pairs.push([anchorA, anchorB]);
+        prevA = anchorA + 1;
+        prevB = anchorB + 1;
+      }
+      if (anchors.length) {
+        lcsPairsInRange(a, prevA, aEnd, b, prevB, bEnd, pairs);
+      }
+    }
+  }
+
+  for (let k = suffix.length - 1; k >= 0; k--) {
+    pairs.push(suffix[k]);
+  }
+}
+
+// Common subsequence between two line arrays, returned as matched index pairs
+// [aIndex, bIndex] in increasing order. Exact (longest) for normal inputs.
+export function lcsPairs(a, b) {
+  const pairs = [];
+  lcsPairsInRange(a, 0, a.length, b, 0, b.length, pairs);
   return pairs;
 }
 
@@ -138,8 +234,11 @@ export function mergeThreeWay(base, mine, theirs) {
   return merged.join('\n');
 }
 
-// Compatibility wrapper for callers that still pass timestamps. Conflict output
-// is timestamp-independent so skewed device clocks cannot choose a lossy winner.
-export function mergeByRecency(base, mine, theirs) {
-  return mergeThreeWay(base, mine, theirs);
+// Merge two versions when their common ancestor is unknown. The lines both
+// sides share stand in for the ancestor, so nothing from either side is dropped.
+export function mergeWithoutBase(mine, theirs) {
+  const mineLines = splitLines(mine);
+  const theirsLines = splitLines(theirs);
+  const shared = lcsPairs(mineLines, theirsLines).map(([mineIdx]) => mineLines[mineIdx]);
+  return mergeThreeWay(shared.join('\n'), mine, theirs);
 }

@@ -2,107 +2,112 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  isRemoteVersionNewer,
-  shouldBlockSaveOverRemote,
-  shouldQueueBackupConflict,
-  shouldRestoreDraftBackup,
+  compareVersions,
+  decideIncoming,
+  documentRev,
+  hashText,
+  isOwnPendingWrite,
+  remapCursor,
+  versionOf,
 } from '../src/syncGuard.js';
 
-test('isRemoteVersionNewer compares server timestamps', () => {
-  assert.equal(isRemoteVersionNewer(100, 200), true);
-  assert.equal(isRemoteVersionNewer(200, 200), false);
-  assert.equal(isRemoteVersionNewer(300, 200), false);
+test('documents without a revision count as revision 0', () => {
+  assert.equal(documentRev({}), 0);
+  assert.equal(documentRev({ rev: 4 }), 4);
+  assert.deepEqual(versionOf({ updatedAt: 50 }), { rev: 0, updatedAt: 50 });
 });
 
-test('shouldBlockSaveOverRemote blocks stale saves against newer server content', () => {
-  assert.equal(
-    shouldBlockSaveOverRemote({
-      localUpdatedAt: 100,
-      localContent: 'old',
-      serverUpdatedAt: 200,
-      serverContent: 'new',
-    }),
-    true
-  );
+test('revision decides which version is newer, regardless of clocks', () => {
+  // Rev 6 was written by a device whose clock is far behind.
+  assert.ok(compareVersions({ rev: 6, updatedAt: 1_000 }, { rev: 5, updatedAt: 9_000 }) > 0);
+  assert.ok(compareVersions({ rev: 5, updatedAt: 9_000 }, { rev: 6, updatedAt: 1_000 }) < 0);
+  assert.equal(compareVersions({ rev: 5, updatedAt: 1_000 }, { rev: 5, updatedAt: 1_000 }), 0);
+});
 
-  assert.equal(
-    shouldBlockSaveOverRemote({
-      localUpdatedAt: 100,
-      localContent: 'same',
-      serverUpdatedAt: 200,
-      serverContent: 'same',
-    }),
-    false
-  );
+test('equal revisions fall back to time for writes from older app versions', () => {
+  assert.ok(compareVersions({ rev: 0, updatedAt: 2_000 }, { rev: 0, updatedAt: 1_000 }) > 0);
+});
 
+test('hashText distinguishes content and is stable', () => {
+  assert.equal(hashText('- a\n- b'), hashText('- a\n- b'));
+  assert.notEqual(hashText('- a\n- b'), hashText('- b\n- a'));
+  assert.notEqual(hashText(''), hashText(' '));
+});
+
+test('a stale server copy is ignored even if its timestamp looks newer', () => {
   assert.equal(
-    shouldBlockSaveOverRemote({
-      localUpdatedAt: 100,
-      localContent: 'old',
-      serverUpdatedAt: 200,
-      serverContent: 'new',
-      allowOverwrite: true,
+    decideIncoming({
+      base: { rev: 5, updatedAt: 1_000, content: 'new' },
+      incoming: { rev: 4, updatedAt: 99_000, content: 'old' },
+      editorContent: 'new',
+      dirty: false,
+      sentWrites: [],
     }),
-    false
+    'ignore'
   );
 });
 
-test('shouldRestoreDraftBackup only restores unsaved crash recovery drafts', () => {
+test('a newer server copy is adopted when there is nothing unsaved', () => {
   assert.equal(
-    shouldRestoreDraftBackup({
-      backupContent: 'draft',
-      backupTime: 150,
-      serverContent: 'saved',
-      serverUpdatedAt: 100,
-      localUpdatedAt: 100,
+    decideIncoming({
+      base: { rev: 5, updatedAt: 1_000, content: 'a' },
+      incoming: { rev: 6, updatedAt: 900, content: 'b' },
+      editorContent: 'a',
+      dirty: false,
+      sentWrites: [],
     }),
-    true
-  );
-
-  assert.equal(
-    shouldRestoreDraftBackup({
-      backupContent: 'draft',
-      backupTime: 250,
-      serverContent: 'saved',
-      serverUpdatedAt: 200,
-      localUpdatedAt: 100,
-    }),
-    false
+    'adopt'
   );
 });
 
-test('shouldQueueBackupConflict only fires when server moved ahead of last sync', () => {
+test('a newer server copy is merged when the editor has unsaved changes', () => {
   assert.equal(
-    shouldQueueBackupConflict({
-      backupContent: 'local draft',
-      backupTime: 1_500,
-      serverContent: 'saved',
-      serverUpdatedAt: 1_000,
-      localUpdatedAt: 1_000,
+    decideIncoming({
+      base: { rev: 5, updatedAt: 1_000, content: 'a' },
+      incoming: { rev: 6, updatedAt: 2_000, content: 'b' },
+      editorContent: 'a plus typing',
+      dirty: true,
+      sentWrites: [],
     }),
-    false,
-    'local typing after save is not a remote conflict'
+    'merge'
+  );
+});
+
+test('a newer copy identical to the editor is adopted, not merged', () => {
+  assert.equal(
+    decideIncoming({
+      base: { rev: 5, updatedAt: 1_000, content: 'a' },
+      incoming: { rev: 6, updatedAt: 2_000, content: 'same' },
+      editorContent: 'same',
+      dirty: true,
+      sentWrites: [],
+    }),
+    'adopt'
+  );
+});
+
+test('our own unconfirmed write coming back is not treated as a remote edit', () => {
+  const base = { rev: 5, updatedAt: 1_000, content: 'a' };
+  const echo = { rev: 6, updatedAt: 2_000, content: 'ab' };
+  const sentWrites = [{ updatedAt: 2_000, hash: hashText('ab') }];
+
+  assert.equal(isOwnPendingWrite(echo, base, sentWrites), true);
+  assert.equal(
+    decideIncoming({ base, incoming: echo, editorContent: 'abc', dirty: true, sentWrites }),
+    'ignore'
   );
 
-  assert.equal(
-    shouldQueueBackupConflict({
-      backupContent: 'local',
-      backupTime: 300,
-      serverContent: 'remote',
-      serverUpdatedAt: 200,
-      localUpdatedAt: 100,
-    }),
-    true
-  );
+  // Same timestamp but different text is somebody else's write.
+  assert.equal(isOwnPendingWrite({ ...echo, content: 'xyz' }, base, sentWrites), false);
+  // Once the base has caught up it is no longer pending.
+  assert.equal(isOwnPendingWrite(echo, echo, sentWrites), false);
+});
 
-  assert.equal(
-    shouldQueueBackupConflict({
-      backupContent: 'same',
-      backupTime: 300,
-      serverContent: 'same',
-      serverUpdatedAt: 200,
-      localUpdatedAt: 100,
-    }),
-    false
-  );
+test('remapCursor keeps the caret beside the text being edited', () => {
+  // Remote text appended below: caret stays put.
+  assert.equal(remapCursor('one\ntwo', 'one\ntwo\nthree', 3), 3);
+  // Remote text inserted above: caret moves down with its line.
+  assert.equal(remapCursor('one\ntwo', 'zero\none\ntwo', 7), 12);
+  // Unrelated rewrite: clamp into range.
+  assert.equal(remapCursor('long text here', 'short', 12), 5);
 });

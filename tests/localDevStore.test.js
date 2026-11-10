@@ -8,6 +8,7 @@ import {
   getDocuments,
   getSnippets,
   getSnapshots,
+  saveDocumentContent,
   updateDocumentContent,
   upsertDocument,
   upsertSnippet,
@@ -44,8 +45,36 @@ test('upsertDocument persists and updates documents', () => {
       content: 'updated',
       createdAt: 1,
       updatedAt: 2,
+      rev: 1,
     },
   ]);
+});
+
+test('saveDocumentContent only writes on top of the revision it was based on', () => {
+  upsertDocument({
+    id: 'doc-1',
+    userId: 'local-dev-user',
+    year: 2026,
+    content: 'hello',
+    createdAt: 1,
+    updatedAt: 1,
+  });
+
+  assert.deepEqual(
+    saveDocumentContent({ docId: 'doc-1', content: 'first', updatedAt: 2, baseRev: 0 }),
+    { status: 'saved', rev: 1 }
+  );
+
+  // A second writer still on revision 0 is refused and handed the current copy.
+  const stale = saveDocumentContent({ docId: 'doc-1', content: 'stale', updatedAt: 3, baseRev: 0 });
+  assert.equal(stale.status, 'conflict');
+  assert.equal(stale.doc.content, 'first');
+  assert.equal(getDocuments()[0].content, 'first');
+
+  assert.deepEqual(
+    saveDocumentContent({ docId: 'doc-1', content: 'second', updatedAt: 4, baseRev: 1 }),
+    { status: 'saved', rev: 2 }
+  );
 });
 
 test('addSnapshot keeps only 20 unpinned snapshots per year', () => {

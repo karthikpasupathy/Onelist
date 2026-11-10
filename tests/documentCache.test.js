@@ -37,7 +37,9 @@ test('writeDocumentCache persists content for a user/year', async () => {
     updatedAt: 100,
     baseUpdatedAt: 100,
     baseContent: '- two\n- three',
+    baseRev: 0,
     localEditAt: 0,
+    sentWrites: [],
     dirty: false,
   });
 });
@@ -48,7 +50,9 @@ test('writeDocumentCache stores a distinct merge base alongside the draft', asyn
     content: 'draft text',
     baseUpdatedAt: 100,
     baseContent: 'saved text',
+    baseRev: 7,
     localEditAt: 150,
+    sentWrites: [{ updatedAt: 140, hash: 'abc' }, { bogus: true }],
     dirty: true,
   });
 
@@ -61,7 +65,9 @@ test('writeDocumentCache stores a distinct merge base alongside the draft', asyn
     updatedAt: 100,
     baseUpdatedAt: 100,
     baseContent: 'saved text',
+    baseRev: 7,
     localEditAt: 150,
+    sentWrites: [{ updatedAt: 140, hash: 'abc' }],
     dirty: true,
   });
 });
@@ -81,7 +87,9 @@ test('readDocumentCache migrates legacy localStorage caches without a base', asy
     updatedAt: 5,
     baseUpdatedAt: 5,
     baseContent: 'legacy',
+    baseRev: 0,
     localEditAt: 0,
+    sentWrites: [],
     dirty: false,
   });
   assert.equal(storage.get('onelist_doc_cache_user-1_2026'), undefined);

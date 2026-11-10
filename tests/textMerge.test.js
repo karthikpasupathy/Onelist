@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { mergeByRecency, mergeThreeWay } from '../src/textMerge.js';
+import { lcsPairs, mergeThreeWay, mergeWithoutBase } from '../src/textMerge.js';
 
 test('identical sides return that content', () => {
   assert.equal(mergeThreeWay('a\nb', 'a\nb\nc', 'a\nb\nc'), 'a\nb\nc');
@@ -65,11 +65,11 @@ test('divergent same-line edit preserves both sides despite recency', () => {
   ].join('\n');
 
   assert.equal(
-    mergeByRecency(base, mine, theirs, { mineUpdatedAt: 200, theirsUpdatedAt: 100 }),
+    mergeThreeWay(base, mine, theirs),
     expected
   );
   assert.equal(
-    mergeByRecency(base, mine, theirs, { mineUpdatedAt: 100, theirsUpdatedAt: 200 }),
+    mergeThreeWay(base, mine, theirs),
     expected
   );
 });
@@ -148,4 +148,54 @@ test('merge converges: after saving the merged result, re-sync is stable', () =>
   const nextLocal = `${merged}\nmore`;
   assert.equal(mergeThreeWay(merged, nextLocal, merged), nextLocal);
   assert.equal(mergeThreeWay(merged, merged, merged), merged);
+});
+
+test('large files merge without building a quadratic table', () => {
+  // 20,000 distinct lines: an exact LCS table would need 400M cells.
+  const baseLines = Array.from({ length: 20_000 }, (_, i) => `- entry ${i}`);
+  const mineLines = [...baseLines];
+  const theirsLines = [...baseLines];
+
+  // Edits at both ends of each side defeat the cheap prefix/suffix trim.
+  mineLines[0] = '- entry 0 (laptop)';
+  mineLines.push('- laptop tail');
+  theirsLines[10_000] = '- entry 10000 (phone)';
+  theirsLines.splice(5, 1);
+
+  const merged = mergeThreeWay(baseLines.join('\n'), mineLines.join('\n'), theirsLines.join('\n')).split('\n');
+
+  assert.equal(merged.length, 20_000);
+  assert.equal(merged[0], '- entry 0 (laptop)');
+  assert.equal(merged[merged.length - 1], '- laptop tail');
+  assert.ok(merged.includes('- entry 10000 (phone)'));
+  assert.ok(!merged.includes('- entry 5'));
+  assert.ok(!merged.some((line) => line.includes('ONELIST')));
+});
+
+test('lcsPairs returns an ordered matching for large inputs with repeated lines', () => {
+  const a = [];
+  const b = [];
+  for (let i = 0; i < 6_000; i++) {
+    a.push(i % 3 === 0 ? '' : `line ${i}`);
+    b.push(i % 3 === 0 ? '' : `line ${i}`);
+  }
+  a[100] = 'changed in a';
+  b[5_000] = 'changed in b';
+
+  const pairs = lcsPairs(a, b);
+  for (let k = 0; k < pairs.length; k++) {
+    assert.equal(a[pairs[k][0]], b[pairs[k][1]]);
+    if (k > 0) {
+      assert.ok(pairs[k][0] > pairs[k - 1][0]);
+      assert.ok(pairs[k][1] > pairs[k - 1][1]);
+    }
+  }
+  assert.ok(pairs.length >= 5_990);
+});
+
+test('mergeWithoutBase keeps every line from both sides', () => {
+  const mine = 'a\nb\nmine only\nc';
+  const theirs = 'a\nb\nc\ntheirs only';
+  assert.equal(mergeWithoutBase(mine, theirs), 'a\nb\nmine only\nc\ntheirs only');
+  assert.equal(mergeWithoutBase('same', 'same'), 'same');
 });

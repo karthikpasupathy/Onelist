@@ -1,3 +1,5 @@
+import { formatTimeStamp } from './bulletPrefix.js';
+
 export const BUILTIN_SLASH_COMMANDS = [
   {
     name: 'today',
@@ -12,12 +14,7 @@ export const BUILTIN_SLASH_COMMANDS = [
   {
     name: 'time',
     description: 'Insert current time (H:MM)',
-    preview: () => {
-      const now = new Date();
-      const hours = now.getHours();
-      const minutes = String(now.getMinutes()).padStart(2, '0');
-      return `(${hours}:${minutes})`;
-    },
+    preview: () => formatTimeStamp(),
   },
   {
     name: 'line',

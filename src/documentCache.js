@@ -35,7 +35,14 @@ function normalizeDraft(userId, year, draft) {
     baseContent,
     baseUpdatedAt,
     updatedAt: baseUpdatedAt,
+    // Server revision the cached base text corresponds to (0 for drafts
+    // written before revisions existed).
+    baseRev: Number.isInteger(draft.baseRev) ? draft.baseRev : 0,
     localEditAt: Number.isFinite(draft.localEditAt) ? draft.localEditAt : 0,
+    // Writes sent to the server but not yet confirmed: [{ updatedAt, hash }].
+    sentWrites: Array.isArray(draft.sentWrites)
+      ? draft.sentWrites.filter((write) => Number.isFinite(write?.updatedAt) && typeof write?.hash === 'string')
+      : [],
     dirty: Boolean(draft.dirty),
   };
 }
@@ -127,7 +134,7 @@ export async function readDocumentCache(userId, year) {
 export async function writeDocumentCache(
   userId,
   year,
-  { docId, content, updatedAt, baseContent, baseUpdatedAt, localEditAt, dirty } = {}
+  { docId, content, updatedAt, baseContent, baseUpdatedAt, baseRev, localEditAt, sentWrites, dirty } = {}
 ) {
   if (!userId || !docId || !Number.isInteger(year)) return null;
 
@@ -136,7 +143,9 @@ export async function writeDocumentCache(
     content: content ?? '',
     baseContent: typeof baseContent === 'string' ? baseContent : (content ?? ''),
     baseUpdatedAt: Number.isFinite(baseUpdatedAt) ? baseUpdatedAt : updatedAt,
+    baseRev,
     localEditAt,
+    sentWrites,
     dirty,
   });
   if (!draft) return null;

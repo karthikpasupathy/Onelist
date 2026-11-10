@@ -12,6 +12,11 @@ const _schema = i.schema({
       content: i.string(),
       createdAt: i.number(),
       updatedAt: i.number(),
+      // Revision counter, bumped by one on every save. `prevRev` is the
+      // revision the saved text was based on; the update rule in
+      // instant.perms.ts rejects a save whose `prevRev` is no longer current.
+      rev: i.number().optional(),
+      prevRev: i.number().optional(),
     }),
     snapshots: i.entity({
       userId: i.string().indexed(),
